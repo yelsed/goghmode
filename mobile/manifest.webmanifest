@@ -1,0 +1,14 @@
+{
+  "name": "GoghMode Mobile",
+  "short_name": "GoghMode",
+  "id": "/goghmode-mobile/",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#111827",
+  "description": "Draw quick sketches on a phone or iPad and export them for AI tools.",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

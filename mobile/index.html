@@ -1,0 +1,605 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>GoghMode Mobile</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#111827">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      background: oklch(20% 0.035 260);
+      color: oklch(97% 0.012 255);
+      --page: oklch(20% 0.035 260);
+      --panel: oklch(25% 0.035 260);
+      --panel-strong: oklch(31% 0.04 260);
+      --line: oklch(42% 0.035 260);
+      --muted: oklch(78% 0.025 255);
+      --text: oklch(97% 0.012 255);
+      --accent: oklch(74% 0.16 86);
+      --accent-pressed: oklch(68% 0.15 86);
+      --paper: oklch(98% 0.006 95);
+      --ink: oklch(22% 0.04 260);
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-touch-callout: none;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      min-height: 100svh;
+      background: var(--page);
+      overflow: hidden;
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-touch-callout: none;
+    }
+
+    body {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      overscroll-behavior: none;
+    }
+
+    .app {
+      min-height: 100svh;
+      padding: calc(18px + env(safe-area-inset-top)) max(18px, env(safe-area-inset-right)) calc(18px + env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left));
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      background:
+        radial-gradient(circle at top left, oklch(33% 0.05 260), transparent 38%),
+        linear-gradient(180deg, oklch(23% 0.035 260), var(--page));
+    }
+
+    header {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .title-lockup {
+      display: grid;
+      gap: 3px;
+    }
+
+    .eyebrow {
+      margin: 0;
+      color: var(--accent);
+      font-size: 0.78rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 2.35rem;
+      line-height: 0.95;
+      letter-spacing: -0.055em;
+    }
+
+    #status {
+      margin: 0;
+      max-width: 18rem;
+      padding: 0.62rem 0.78rem;
+      border: 1px solid oklch(41% 0.035 260);
+      border-radius: 16px;
+      background: oklch(27% 0.035 260 / 0.88);
+      color: var(--muted);
+      font-size: 0.9rem;
+      line-height: 1.25;
+    }
+
+    .toolbar {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+    }
+
+    .primary-actions,
+    .secondary-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      overflow-x: auto;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .primary-actions::-webkit-scrollbar,
+    .secondary-actions::-webkit-scrollbar {
+      display: none;
+    }
+
+    button {
+      appearance: none;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--panel);
+      color: var(--text);
+      padding: 0.72rem 0.92rem;
+      min-width: max-content;
+      min-height: 44px;
+      font: inherit;
+      font-size: 0.95rem;
+      font-weight: 750;
+      transition: background-color 160ms ease-out, border-color 160ms ease-out, transform 120ms ease-out;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    button.primary {
+      border-color: oklch(82% 0.14 86);
+      background: var(--accent);
+      color: var(--ink);
+    }
+
+    button:disabled {
+      cursor: wait;
+      opacity: 0.68;
+    }
+
+    button:active {
+      transform: translateY(1px);
+    }
+
+    button.primary:active {
+      background: var(--accent-pressed);
+    }
+
+    button:focus-visible,
+    input[type="range"]:focus-visible {
+      outline: 3px solid oklch(88% 0.12 86);
+      outline-offset: 3px;
+    }
+
+    .brush-control {
+      display: grid;
+      grid-template-columns: auto minmax(128px, 1fr) 2ch;
+      align-items: center;
+      gap: 10px;
+      min-height: 44px;
+      padding: 0.55rem 0.72rem;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: oklch(22% 0.032 260);
+      color: var(--text);
+      font-size: 0.9rem;
+      font-weight: 750;
+    }
+
+    input[type="range"] {
+      accent-color: var(--accent);
+      width: 100%;
+    }
+
+    output {
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+    }
+
+    .canvas-wrap {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+    }
+
+    #canvas {
+      width: 100%;
+      min-height: 330px;
+      max-height: calc(100svh - 230px);
+      aspect-ratio: 8 / 5;
+      align-self: stretch;
+      border: 1px solid oklch(38% 0.025 260);
+      border-radius: 24px;
+      background: var(--paper);
+      box-shadow: 0 22px 72px oklch(8% 0.035 260 / 0.42);
+      touch-action: none;
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-touch-callout: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    @media (max-width: 560px) {
+      header {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      #status {
+        max-width: none;
+      }
+
+      h1 {
+        font-size: 2.1rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header>
+      <div class="title-lockup">
+        <p class="eyebrow">Local sketchpad</p>
+        <h1>GoghMode</h1>
+      </div>
+      <p id="status" role="status" aria-live="polite">Draw on the paper. Send to Mac when ready.</p>
+    </header>
+
+    <section class="toolbar" aria-label="Drawing controls">
+      <div class="primary-actions">
+        <button type="button" id="send-mac" class="primary">Send to Mac</button>
+        <button type="button" id="share-png">Share PNG</button>
+      </div>
+      <div class="secondary-actions">
+        <button type="button" id="undo">Undo</button>
+        <button type="button" id="clear">Clear</button>
+        <button type="button" id="export-svg">Export SVG</button>
+        <button type="button" id="export-json">Export JSON</button>
+        <button type="button" id="export-png">Export PNG</button>
+        <label class="brush-control" for="brush">
+          <span>Brush</span>
+          <input id="brush" type="range" min="1" max="32" step="1" value="4" aria-label="Brush size">
+          <output id="brush-value" for="brush">4</output>
+        </label>
+      </div>
+    </section>
+
+    <section class="canvas-wrap" aria-label="Drawing surface">
+      <canvas id="canvas" width="1024" height="640"></canvas>
+    </section>
+  </main>
+
+  <script>
+    const BACKGROUND = "rgb(250, 249, 244)";
+    const INK = "rgb(30, 35, 48)";
+    const SCHEMA_VERSION = 1;
+    const LOGICAL_FILES = { json: "drawings/latest.json", svg: "drawings/latest.svg", png: "drawings/latest.png" };
+
+    const canvas = document.getElementById("canvas");
+    const context = canvas.getContext("2d");
+    const status = document.getElementById("status");
+    const brush = document.getElementById("brush");
+    const brushValue = document.getElementById("brush-value");
+    const sendMacButton = document.getElementById("send-mac");
+    const strokes = [];
+    let activeStroke = null;
+    let activePointerId = null;
+    let nextId = 1;
+
+    function clampBrush(value) {
+      const parsed = Number.parseFloat(value);
+      if (!Number.isFinite(parsed)) {
+        return 4;
+      }
+      return Math.min(32, Math.max(1, parsed));
+    }
+
+    function pressureFromEvent(event) {
+      const pressure = Number.isFinite(event.pressure) && event.pressure > 0 ? event.pressure : 0.5;
+      return Math.min(1, Math.max(0, pressure));
+    }
+
+    function nowMs() {
+      return Math.round(performance.timeOrigin + performance.now());
+    }
+
+    function canvasPoint(event) {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: (event.clientX - rect.left) * (canvas.width / rect.width),
+        y: (event.clientY - rect.top) * (canvas.height / rect.height),
+        pressure: pressureFromEvent(event),
+        t: nowMs()
+      };
+    }
+
+    function samePoint(left, right) {
+      return left.x === right.x && left.y === right.y && left.pressure === right.pressure;
+    }
+
+    function appendPoint(stroke, point) {
+      if (!inBounds(point, canvas.width, canvas.height) || !Number.isFinite(point.pressure)) {
+        return false;
+      }
+      point.pressure = Math.min(1, Math.max(0, point.pressure));
+      const previous = stroke.points[stroke.points.length - 1];
+      if (previous && samePoint(previous, point)) {
+        return false;
+      }
+      stroke.points.push(point);
+      return true;
+    }
+
+    function currentBrushWidth() {
+      const width = clampBrush(brush.value);
+      brush.value = String(width);
+      brushValue.textContent = String(width);
+      return width;
+    }
+
+    function snapshot() {
+      const allStrokes = activeStroke && activeStroke.points.length > 0 ? strokes.concat([activeStroke]) : strokes.slice();
+      return {
+        schemaVersion: SCHEMA_VERSION,
+        canvas: { width: canvas.width, height: canvas.height, background: BACKGROUND },
+        strokes: allStrokes.map((stroke) => ({
+          id: stroke.id,
+          color: stroke.color,
+          width: stroke.width,
+          points: stroke.points.map((point) => ({ x: point.x, y: point.y, pressure: point.pressure, t: point.t }))
+        })),
+        files: LOGICAL_FILES
+      };
+    }
+
+    function canvasExtent(value) {
+      return Number.isFinite(value) ? Math.max(1, Math.ceil(value)) : 1;
+    }
+
+    function inBounds(point, width, height) {
+      return Number.isFinite(point.x) && Number.isFinite(point.y) && point.x >= 0 && point.y >= 0 && point.x <= width && point.y <= height;
+    }
+
+    function svgNumber(value) {
+      if (!Number.isFinite(value)) {
+        return "0";
+      }
+      if (Math.trunc(value) === value) {
+        return String(value);
+      }
+      return value.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
+    }
+
+    function escapeSvgAttr(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("\"", "&quot;")
+        .replaceAll("'", "&apos;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
+    }
+
+    function snapshotToSvg(snapshot) {
+      const width = canvasExtent(snapshot.canvas.width);
+      const height = canvasExtent(snapshot.canvas.height);
+      let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">\n`;
+      svg += `<rect width="100%" height="100%" fill="${escapeSvgAttr(BACKGROUND)}"/>\n`;
+
+      for (const stroke of snapshot.strokes) {
+        const points = stroke.points.filter((point) => inBounds(point, snapshot.canvas.width, snapshot.canvas.height));
+        if (points.length === 0) {
+          continue;
+        }
+        if (points.length === 1) {
+          const point = points[0];
+          svg += `<circle cx="${svgNumber(point.x)}" cy="${svgNumber(point.y)}" r="${svgNumber(stroke.width / 2)}" fill="${escapeSvgAttr(stroke.color)}"/>\n`;
+          continue;
+        }
+        const [first, ...rest] = points;
+        let data = `M ${svgNumber(first.x)} ${svgNumber(first.y)}`;
+        for (const point of rest) {
+          data += ` L ${svgNumber(point.x)} ${svgNumber(point.y)}`;
+        }
+        svg += `<path d="${escapeSvgAttr(data)}" fill="none" stroke="${escapeSvgAttr(stroke.color)}" stroke-width="${svgNumber(stroke.width)}" stroke-linecap="round" stroke-linejoin="round"/>\n`;
+      }
+
+      svg += "</svg>\n";
+      return svg;
+    }
+
+    function paintStroke(stroke) {
+      if (stroke.points.length === 0) {
+        return;
+      }
+      context.strokeStyle = stroke.color;
+      context.fillStyle = stroke.color;
+      context.lineWidth = stroke.width;
+      context.lineCap = "round";
+      context.lineJoin = "round";
+      if (stroke.points.length === 1) {
+        const point = stroke.points[0];
+        context.beginPath();
+        context.arc(point.x, point.y, stroke.width / 2, 0, Math.PI * 2);
+        context.fill();
+        return;
+      }
+      context.beginPath();
+      context.moveTo(stroke.points[0].x, stroke.points[0].y);
+      for (const point of stroke.points.slice(1)) {
+        context.lineTo(point.x, point.y);
+      }
+      context.stroke();
+    }
+
+    function repaint() {
+      context.fillStyle = BACKGROUND;
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      for (const stroke of strokes) {
+        paintStroke(stroke);
+      }
+      if (activeStroke) {
+        paintStroke(activeStroke);
+      }
+    }
+
+    function downloadText(filename, mimeType, text) {
+      const url = URL.createObjectURL(new Blob([text], { type: mimeType }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    function downloadCanvasPng(filename) {
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          status.textContent = "PNG export failed.";
+          return;
+        }
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = filename;
+        document.body.append(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+      }, "image/png");
+    }
+
+    async function shareCanvasPng() {
+      canvas.toBlob(async (blob) => {
+        if (!blob) {
+          status.textContent = "PNG export failed.";
+          return;
+        }
+        const file = new File([blob], "goghmode-latest.png", { type: "image/png" });
+        if (!navigator.share || !navigator.canShare || !navigator.canShare({ files: [file] })) {
+          status.textContent = "Sharing unavailable; use Export PNG.";
+          return;
+        }
+        try {
+          await navigator.share({ files: [file], title: "GoghMode drawing" });
+        } catch (error) {
+          if (!error || error.name !== "AbortError") {
+            status.textContent = "Sharing unavailable; use Export PNG.";
+          }
+        }
+      }, "image/png");
+    }
+
+    async function sendToMac() {
+      status.textContent = "Sending to Mac...";
+      sendMacButton.disabled = true;
+      try {
+        const response = await fetch("save", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(snapshot())
+        });
+        if (!response.ok) {
+          status.textContent = "Send failed. Keep GoghMode open on the Mac.";
+          return;
+        }
+        status.textContent = "Saved to Mac. In Claude Code, type /goghmode.";
+      } catch (error) {
+        status.textContent = "Send failed. Check same Wi-Fi and keep GoghMode open.";
+      } finally {
+        sendMacButton.disabled = false;
+      }
+    }
+
+    function beginStroke(event) {
+      event.preventDefault();
+      activePointerId = event.pointerId;
+      canvas.setPointerCapture(event.pointerId);
+      activeStroke = { id: `stroke-${nextId++}`, color: INK, width: currentBrushWidth(), points: [] };
+      appendPoint(activeStroke, canvasPoint(event));
+      repaint();
+    }
+
+    function moveStroke(event) {
+      event.preventDefault();
+      if (!activeStroke || event.pointerId !== activePointerId) {
+        return;
+      }
+      if (appendPoint(activeStroke, canvasPoint(event))) {
+        repaint();
+      }
+    }
+
+    function finishStroke(event) {
+      event.preventDefault();
+      if (!activeStroke || event.pointerId !== activePointerId) {
+        return;
+      }
+      if (event.type === "pointerup") {
+        appendPoint(activeStroke, canvasPoint(event));
+      }
+      if (activeStroke.points.length > 0) {
+        strokes.push(activeStroke);
+      }
+      activeStroke = null;
+      activePointerId = null;
+      if (canvas.hasPointerCapture(event.pointerId)) {
+        canvas.releasePointerCapture(event.pointerId);
+      }
+      repaint();
+    }
+
+    document.getElementById("undo").addEventListener("click", () => {
+      strokes.pop();
+      activeStroke = null;
+      activePointerId = null;
+      repaint();
+    });
+
+    document.getElementById("clear").addEventListener("click", () => {
+      strokes.length = 0;
+      activeStroke = null;
+      activePointerId = null;
+      repaint();
+    });
+
+    document.getElementById("export-svg").addEventListener("click", () => {
+      downloadText("goghmode-latest.svg", "image/svg+xml", snapshotToSvg(snapshot()));
+    });
+
+    document.getElementById("export-json").addEventListener("click", () => {
+      downloadText("goghmode-latest.json", "application/json", JSON.stringify(snapshot(), null, 2));
+    });
+
+    document.getElementById("export-png").addEventListener("click", () => {
+      downloadCanvasPng("goghmode-latest.png");
+    });
+
+    document.getElementById("share-png").addEventListener("click", () => {
+      shareCanvasPng();
+    });
+
+    sendMacButton.addEventListener("click", () => {
+      sendToMac();
+    });
+
+    document.addEventListener("selectstart", (event) => {
+      if (event.target.closest(".app")) {
+        event.preventDefault();
+      }
+    });
+
+    canvas.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+    });
+
+    brush.addEventListener("input", currentBrushWidth);
+    canvas.addEventListener("pointerdown", beginStroke);
+    canvas.addEventListener("pointermove", moveStroke);
+    canvas.addEventListener("pointerup", finishStroke);
+    canvas.addEventListener("pointercancel", finishStroke);
+
+    repaint();
+
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("service-worker.js").catch(() => {});
+      });
+    }
+  </script>
+</body>
+</html>

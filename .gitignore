@@ -1,0 +1,17 @@
+/target/
+
+# Local drawing outputs
+/drawings/latest.json
+/drawings/latest.png
+/drawings/latest.svg
+
+# Local editor and OS files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local logs and temporary files
+*.log
+*.tmp
