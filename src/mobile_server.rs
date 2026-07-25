@@ -8,13 +8,24 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::drawing::DrawingSnapshot;
-use crate::export::write_snapshot;
+use crate::pages::{page_id_is_safe, write_page};
 
 const INDEX_HTML: &[u8] = include_bytes!("../mobile/index.html");
 const MANIFEST: &[u8] = include_bytes!("../mobile/manifest.webmanifest");
 const SERVICE_WORKER: &[u8] = include_bytes!("../mobile/service-worker.js");
 const ICON: &[u8] = include_bytes!("../mobile/icon.svg");
 const MAX_SAVE_BODY_BYTES: usize = 4 * 1024 * 1024;
+
+/// Version 1 predates pages and keeps working. Bumping the accepted version
+/// rather than widening it would brick every installed companion build.
+const SUPPORTED_SCHEMA_VERSIONS: [u8; 2] = [1, 2];
+
+/// Lets a companion ask what this Mac understands instead of inferring it from
+/// a rejection. An older Mac has no such route and answers 404, which is itself
+/// a usable answer.
+const CAPABILITIES: &[u8] = br#"{"schemaVersions":[1,2],"features":["pages"]}"#;
+
+pub const DEFAULT_PORT: u16 = 8787;
 
 pub struct MobileServer {
     url: String,
@@ -30,7 +41,7 @@ impl MobileServer {
         let drawings_dir = drawings_dir.as_ref().to_path_buf();
         match Self::start_with_token(
             Ipv4Addr::UNSPECIFIED,
-            8787,
+            DEFAULT_PORT,
             display_ip,
             token.clone(),
             drawings_dir.clone(),
@@ -64,6 +75,13 @@ impl MobileServer {
 
     pub fn url(&self) -> &str {
         &self.url
+    }
+
+    /// The port actually bound. `start` falls back to a random port when 8787
+    /// is taken, which leaves any previously copied URL silently pointing at
+    /// nothing — the desktop app surfaces this rather than hiding it.
+    pub fn port(&self) -> u16 {
+        self.local_addr.port()
     }
 
     fn start_with_token(
@@ -287,7 +305,7 @@ fn handle_save_request(stream: &mut TcpStream, drawings_dir: &Path, body: &[u8])
         return;
     }
 
-    match write_snapshot(&snapshot, drawings_dir) {
+    match write_page(&snapshot, drawings_dir) {
         Ok(_) => write_response(
             stream,
             200,
@@ -308,12 +326,36 @@ fn handle_save_request(stream: &mut TcpStream, drawings_dir: &Path, body: &[u8])
 /// Names the first thing wrong with a snapshot. A bare "invalid" is impossible to
 /// act on when the drawing has thousands of points.
 fn validate_snapshot(snapshot: &DrawingSnapshot) -> Result<(), String> {
-    if snapshot.schema_version != 1 {
+    if !SUPPORTED_SCHEMA_VERSIONS.contains(&snapshot.schema_version) {
         return Err(format!(
-            "unsupported schemaVersion {} (this Mac understands 1)",
+            "unsupported schemaVersion {} (this Mac understands 1 and 2)",
             snapshot.schema_version
         ));
     }
+
+    match snapshot.page.as_ref() {
+        // The page id becomes a directory name. Reject before anything joins it
+        // to a path, so a traversal attempt never reaches the filesystem.
+        Some(page) if !page_id_is_safe(&page.id) => {
+            return Err(format!(
+                "page id {:?} is not usable as a folder name (letters, digits, - and _ only, up to 64)",
+                page.id
+            ))
+        }
+        // Version 2 is the version that promises a page; without one the write
+        // would silently land in the legacy page instead.
+        None if snapshot.schema_version >= 2 => {
+            return Err("schemaVersion 2 must carry a page".to_owned())
+        }
+        _ => {}
+    }
+
+    if let Some(title) = snapshot.page.as_ref().and_then(|page| page.title.as_ref()) {
+        if title.len() > 200 {
+            return Err(format!("page title is too long: {} chars", title.len()));
+        }
+    }
+
     if !valid_canvas_extent(snapshot.canvas.width) || !valid_canvas_extent(snapshot.canvas.height) {
         return Err(format!(
             "canvas {}x{} is outside the supported 1-4096 range",
@@ -397,6 +439,7 @@ fn asset_for_path<'a>(path: &str, route_prefix: &str) -> Option<(&'a [u8], &'sta
     let asset = path.strip_prefix(route_prefix)?;
     match asset {
         "" | "index.html" => Some((INDEX_HTML, "text/html; charset=utf-8")),
+        "capabilities" => Some((CAPABILITIES, "application/json; charset=utf-8")),
         "manifest.webmanifest" => Some((MANIFEST, "application/manifest+json; charset=utf-8")),
         "service-worker.js" => Some((SERVICE_WORKER, "text/javascript; charset=utf-8")),
         "icon.svg" => Some((ICON, "image/svg+xml; charset=utf-8")),

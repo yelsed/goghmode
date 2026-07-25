@@ -5,19 +5,22 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use image::{Rgba, RgbaImage};
 use serde::Serialize;
 
-use crate::drawing::{DrawingSnapshot, Point, Stroke};
+use crate::drawing::{DrawingSnapshot, PageRef, Point, Stroke};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExportedFiles {
     pub json: PathBuf,
     pub svg: PathBuf,
     pub png: PathBuf,
+    pub updated_at: u128,
 }
 
 #[derive(Serialize)]
 struct ExportJson<'a> {
     #[serde(rename = "schemaVersion")]
     schema_version: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page: Option<&'a PageRef>,
     canvas: &'a crate::drawing::CanvasSize,
     strokes: &'a [Stroke],
     #[serde(rename = "updatedAt")]
@@ -27,9 +30,9 @@ struct ExportJson<'a> {
 
 #[derive(Serialize)]
 struct ExportJsonFiles {
-    json: &'static str,
-    svg: &'static str,
-    png: &'static str,
+    json: String,
+    svg: String,
+    png: String,
 }
 
 pub fn snapshot_to_svg(snapshot: &DrawingSnapshot) -> String {
@@ -107,15 +110,17 @@ pub fn snapshot_to_rgba(snapshot: &DrawingSnapshot) -> RgbaImage {
             continue;
         };
         let radius = stroke.width / 2.0;
+        let ink = parse_hex_rgb(&stroke.color);
         fill_brush(
             &mut image,
             first.x.round() as i32,
             first.y.round() as i32,
             radius,
+            ink,
         );
         let mut previous = first;
         for point in points {
-            draw_segment(&mut image, previous, point, radius);
+            draw_segment(&mut image, previous, point, radius, ink);
             previous = point;
         }
     }
@@ -127,26 +132,45 @@ pub fn write_snapshot(
     snapshot: &DrawingSnapshot,
     drawings_dir: impl AsRef<Path>,
 ) -> anyhow::Result<ExportedFiles> {
-    let drawings_dir = drawings_dir.as_ref();
-    fs::create_dir_all(drawings_dir)?;
+    write_artifacts(snapshot, drawings_dir, "latest", "drawings/", None)
+}
 
-    let json_path = drawings_dir.join("latest.json");
-    let svg_path = drawings_dir.join("latest.svg");
-    let png_path = drawings_dir.join("latest.png");
-    let json_tmp = drawings_dir.join("latest.json.tmp");
-    let svg_tmp = drawings_dir.join("latest.svg.tmp");
-    let png_tmp = drawings_dir.join("latest.png.tmp");
+/// Writes the JSON, SVG and PNG for one snapshot into `directory` as
+/// `<stem>.{json,svg,png}`. `link_prefix` is the project-relative directory the
+/// `files` block in the JSON should point at, so a consumer reading the JSON can
+/// find its siblings. `updated_at_override` keeps a mirrored copy stamped with
+/// the same time as its original.
+pub fn write_artifacts(
+    snapshot: &DrawingSnapshot,
+    directory: impl AsRef<Path>,
+    stem: &str,
+    link_prefix: &str,
+    updated_at_override: Option<u128>,
+) -> anyhow::Result<ExportedFiles> {
+    let directory = directory.as_ref();
+    fs::create_dir_all(directory)?;
 
-    let updated_at = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
+    let json_path = directory.join(format!("{stem}.json"));
+    let svg_path = directory.join(format!("{stem}.svg"));
+    let png_path = directory.join(format!("{stem}.png"));
+    let json_tmp = directory.join(format!("{stem}.json.tmp"));
+    let svg_tmp = directory.join(format!("{stem}.svg.tmp"));
+    let png_tmp = directory.join(format!("{stem}.png.tmp"));
+
+    let updated_at = match updated_at_override {
+        Some(updated_at) => updated_at,
+        None => SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis(),
+    };
     let export_json = ExportJson {
         schema_version: snapshot.schema_version,
+        page: snapshot.page.as_ref(),
         canvas: &snapshot.canvas,
         strokes: &snapshot.strokes,
         updated_at,
         files: ExportJsonFiles {
-            json: "drawings/latest.json",
-            svg: "drawings/latest.svg",
-            png: "drawings/latest.png",
+            json: format!("{link_prefix}{stem}.json"),
+            svg: format!("{link_prefix}{stem}.svg"),
+            png: format!("{link_prefix}{stem}.png"),
         },
     };
     fs::write(&json_tmp, serde_json::to_string_pretty(&export_json)?)?;
@@ -162,6 +186,7 @@ pub fn write_snapshot(
         json: json_path,
         svg: svg_path,
         png: png_path,
+        updated_at,
     })
 }
 
@@ -207,7 +232,24 @@ fn escape_svg_attr(value: &str) -> String {
     escaped
 }
 
-fn draw_segment(image: &mut RgbaImage, start: &Point, end: &Point, radius: f32) {
+const DEFAULT_INK: Rgba<u8> = Rgba([17, 24, 39, 255]);
+
+fn parse_hex_rgb(color: &str) -> Rgba<u8> {
+    let digits = color.strip_prefix('#').unwrap_or(color);
+    let expanded = match digits.len() {
+        3 => digits.chars().flat_map(|digit| [digit, digit]).collect(),
+        6 => digits.to_owned(),
+        _ => return DEFAULT_INK,
+    };
+
+    let channel = |range: std::ops::Range<usize>| u8::from_str_radix(&expanded[range], 16).ok();
+    match (channel(0..2), channel(2..4), channel(4..6)) {
+        (Some(red), Some(green), Some(blue)) => Rgba([red, green, blue, 255]),
+        _ => DEFAULT_INK,
+    }
+}
+
+fn draw_segment(image: &mut RgbaImage, start: &Point, end: &Point, radius: f32, ink: Rgba<u8>) {
     let mut x0 = start.x.round() as i32;
     let mut y0 = start.y.round() as i32;
     let x1 = end.x.round() as i32;
@@ -220,7 +262,7 @@ fn draw_segment(image: &mut RgbaImage, start: &Point, end: &Point, radius: f32) 
     let mut err = dx + dy;
 
     loop {
-        fill_brush(image, x0, y0, radius);
+        fill_brush(image, x0, y0, radius, ink);
         if x0 == x1 && y0 == y1 {
             break;
         }
@@ -236,7 +278,7 @@ fn draw_segment(image: &mut RgbaImage, start: &Point, end: &Point, radius: f32) 
     }
 }
 
-fn fill_brush(image: &mut RgbaImage, cx: i32, cy: i32, radius: f32) {
+fn fill_brush(image: &mut RgbaImage, cx: i32, cy: i32, radius: f32, ink: Rgba<u8>) {
     let radius = radius.max(0.5);
     let extent = radius.ceil() as i32;
     let radius_squared = radius * radius;
@@ -244,10 +286,11 @@ fn fill_brush(image: &mut RgbaImage, cx: i32, cy: i32, radius: f32) {
         for x in (cx - extent)..=(cx + extent) {
             let dx = x - cx;
             let dy = y - cy;
-            if (dx * dx + dy * dy) as f32 <= radius_squared {
-                if x >= 0 && y >= 0 && (x as u32) < image.width() && (y as u32) < image.height() {
-                    image.put_pixel(x as u32, y as u32, Rgba([17, 24, 39, 255]));
-                }
+            let inside_brush = (dx * dx + dy * dy) as f32 <= radius_squared;
+            let inside_image =
+                x >= 0 && y >= 0 && (x as u32) < image.width() && (y as u32) < image.height();
+            if inside_brush && inside_image {
+                image.put_pixel(x as u32, y as u32, ink);
             }
         }
     }

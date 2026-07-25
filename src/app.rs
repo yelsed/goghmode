@@ -1,20 +1,34 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arboard::{Clipboard, ImageData};
-use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke as EguiStroke, Vec2};
+use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke as EguiStroke, TextureHandle, Vec2};
 
 use crate::drawing::{Drawing, Stroke};
 use crate::export::{snapshot_to_rgba, write_snapshot};
-use crate::mobile_server::MobileServer;
+use crate::mobile_server::{MobileServer, DEFAULT_PORT};
+use crate::pages::{list_pages, load_page_snapshot, pages_dir, write_page, PageEntry};
 use crate::prompt::{prompt_text, PromptTarget};
+
+const THUMBNAIL_WIDTH: u32 = 240;
+const THUMBNAIL_HEIGHT: u32 = 160;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum View {
+    Canvas,
+    Pages,
+}
 
 pub struct GoghModeApp {
     drawing: Drawing,
     drawings_dir: PathBuf,
     mobile_server: Option<MobileServer>,
     status: String,
+    view: View,
+    pages: Vec<PageEntry>,
+    thumbnails: HashMap<String, TextureHandle>,
 }
 
 impl GoghModeApp {
@@ -33,10 +47,73 @@ impl GoghModeApp {
 
         Self {
             drawing: Drawing::new(1024.0, 640.0),
+            pages: list_pages(&drawings_dir),
             drawings_dir,
             mobile_server,
             status,
+            view: View::Canvas,
+            thumbnails: HashMap::new(),
         }
+    }
+
+    /// Only the port the server actually bound tells the truth: `start` falls
+    /// back to a random one when 8787 is taken, and a URL copied before that
+    /// happened keeps looking correct while pointing nowhere.
+    fn port_warning(&self) -> Option<String> {
+        let server = self.mobile_server.as_ref()?;
+        (server.port() != DEFAULT_PORT).then(|| {
+            format!(
+                "Port {DEFAULT_PORT} was taken, so this session is on {}. Re-copy the mobile URL — an older one points at nothing.",
+                server.port()
+            )
+        })
+    }
+
+    fn refresh_pages(&mut self) {
+        self.pages = list_pages(&self.drawings_dir);
+    }
+
+    fn promote_page(&mut self, page_id: &str) {
+        let promoted = load_page_snapshot(&self.drawings_dir, page_id)
+            .and_then(|snapshot| write_snapshot(&snapshot, &self.drawings_dir).map(|_| ()));
+        self.status = match promoted {
+            // Only latest.* moves. The page keeps its own files and its place in
+            // the list, so promoting is not an edit.
+            Ok(()) => format!("Pointed drawings/latest.* at page {page_id}"),
+            Err(error) => format!("Could not open page {page_id}: {error}"),
+        };
+    }
+
+    fn reveal_drawings_dir(&mut self) {
+        let target = &self.drawings_dir;
+        let _ = std::fs::create_dir_all(target);
+        self.status = match std::process::Command::new("open").arg(target).spawn() {
+            Ok(_) => format!("Opened {}", target.display()),
+            Err(error) => format!("Could not open the drawings folder: {error}"),
+        };
+    }
+
+    fn thumbnail_for(&mut self, ctx: &egui::Context, page: &PageEntry) -> Option<TextureHandle> {
+        let key = format!("{}@{}", page.page_id, page.updated_at);
+        if let Some(handle) = self.thumbnails.get(&key) {
+            return Some(handle.clone());
+        }
+
+        let path = pages_dir(&self.drawings_dir)
+            .join(&page.page_id)
+            .join("page.png");
+        let image = image::open(path).ok()?.to_rgba8();
+        let thumbnail = image::imageops::thumbnail(&image, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT);
+        let size = [thumbnail.width() as usize, thumbnail.height() as usize];
+        let color_image = egui::ColorImage::from_rgba_unmultiplied(size, thumbnail.as_raw());
+        let handle = ctx.load_texture(&key, color_image, egui::TextureOptions::LINEAR);
+
+        // Keyed by page id and stamp together, so an edited page reloads while
+        // untouched ones stay cached.
+        self.thumbnails
+            .retain(|cached, _| !cached.starts_with(&format!("{}@", page.page_id)));
+        self.thumbnails.insert(key, handle.clone());
+        Some(handle)
     }
 
     pub fn save(&mut self) -> anyhow::Result<()> {
@@ -92,10 +169,12 @@ impl GoghModeApp {
     }
 
     fn save_with_status(&mut self, success_status: &str) -> anyhow::Result<()> {
-        let result = write_snapshot(&self.drawing.snapshot(), &self.drawings_dir).map(|_| ());
+        // Writes the `mac-scratch` page, not whichever page the iPad sent last.
+        let result = write_page(&self.drawing.snapshot(), &self.drawings_dir).map(|_| ());
         match result {
             Ok(()) => {
                 self.status = success_status.to_owned();
+                self.refresh_pages();
                 Ok(())
             }
             Err(error) => {
@@ -121,7 +200,10 @@ impl eframe::App for GoghModeApp {
 
         self.draw_toolbar(ui);
         ui.add_space(10.0);
-        self.draw_canvas(ui);
+        match self.view {
+            View::Canvas => self.draw_canvas(ui),
+            View::Pages => self.draw_page_browser(ui),
+        }
         ui.add_space(8.0);
         StatusBar::show(ui, &self.status);
     }
@@ -148,6 +230,8 @@ impl GoghModeApp {
                                 .size(13.0)
                                 .color(Color32::from_rgb(165, 176, 192)),
                         );
+                        ui.separator();
+                        self.draw_view_switch(ui);
                     });
 
                     ui.add_space(8.0);
@@ -209,8 +293,94 @@ impl GoghModeApp {
                             );
                         }
                     });
+
+                    if let Some(warning) = self.port_warning() {
+                        ui.add_space(4.0);
+                        ui.label(RichText::new(warning).color(Color32::from_rgb(244, 200, 120)));
+                    }
                 });
             });
+    }
+
+    fn draw_view_switch(&mut self, ui: &mut egui::Ui) {
+        let page_count = self.pages.len();
+        if ui
+            .selectable_label(self.view == View::Canvas, "Canvas")
+            .clicked()
+        {
+            self.view = View::Canvas;
+        }
+        if ui
+            .selectable_label(self.view == View::Pages, format!("Pages ({page_count})"))
+            .clicked()
+        {
+            self.view = View::Pages;
+            self.refresh_pages();
+        }
+    }
+
+    fn draw_page_browser(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            if ui.button("Refresh").clicked() {
+                self.refresh_pages();
+            }
+            if ui.button("Reveal drawings folder").clicked() {
+                self.reveal_drawings_dir();
+            }
+            ui.label(
+                RichText::new("Click a page to point drawings/latest.* at it")
+                    .size(12.0)
+                    .color(Color32::from_rgb(150, 162, 178)),
+            );
+        });
+        ui.add_space(8.0);
+
+        if self.pages.is_empty() {
+            self.draw_empty_page_browser(ui);
+            return;
+        }
+
+        let pages = self.pages.clone();
+        let columns = ((ui.available_width() / (THUMBNAIL_WIDTH as f32 + 24.0)).floor() as usize)
+            .clamp(1, 6);
+        let mut promoting = None;
+
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            egui::Grid::new("pages")
+                .spacing(Vec2::new(16.0, 16.0))
+                .show(ui, |ui| {
+                    for (index, page) in pages.iter().enumerate() {
+                        let thumbnail = self.thumbnail_for(ui.ctx(), page);
+                        if draw_page_card(ui, page, thumbnail).clicked() {
+                            promoting = Some(page.page_id.clone());
+                        }
+                        if (index + 1) % columns == 0 {
+                            ui.end_row();
+                        }
+                    }
+                });
+        });
+
+        if let Some(page_id) = promoting {
+            self.promote_page(&page_id);
+        }
+    }
+
+    fn draw_empty_page_browser(&mut self, ui: &mut egui::Ui) {
+        ui.label(
+            RichText::new("No pages yet")
+                .size(16.0)
+                .color(Color32::from_rgb(214, 220, 230)),
+        );
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(format!(
+                "Draw here or on the iPad and pages appear under {}.",
+                pages_dir(&self.drawings_dir).display()
+            ))
+            .size(12.0)
+            .color(Color32::from_rgb(150, 162, 178)),
+        );
     }
 
     fn draw_canvas(&mut self, ui: &mut egui::Ui) {
@@ -276,6 +446,72 @@ impl GoghModeApp {
                     paint_stroke(&painter, canvas_rect, stroke);
                 }
             });
+    }
+}
+
+fn draw_page_card(
+    ui: &mut egui::Ui,
+    page: &PageEntry,
+    thumbnail: Option<TextureHandle>,
+) -> egui::Response {
+    let card_width = THUMBNAIL_WIDTH as f32;
+    ui.allocate_ui(Vec2::new(card_width, THUMBNAIL_HEIGHT as f32 + 52.0), |ui| {
+        egui::Frame::new()
+            .fill(Color32::from_rgb(18, 24, 34))
+            .stroke(EguiStroke::new(1.0, Color32::from_rgb(42, 53, 68)))
+            .corner_radius(egui::CornerRadius::same(12))
+            .inner_margin(egui::Margin::same(8))
+            .show(ui, |ui| {
+                ui.vertical(|ui| {
+                    match thumbnail {
+                        Some(handle) => {
+                            ui.add(
+                                egui::Image::new(&handle)
+                                    .fit_to_exact_size(Vec2::new(
+                                        card_width - 16.0,
+                                        THUMBNAIL_HEIGHT as f32,
+                                    ))
+                                    .corner_radius(egui::CornerRadius::same(8)),
+                            );
+                        }
+                        None => {
+                            ui.allocate_space(Vec2::new(card_width - 16.0, THUMBNAIL_HEIGHT as f32));
+                        }
+                    }
+                    ui.label(
+                        RichText::new(page.title.as_deref().unwrap_or(&page.page_id))
+                            .size(13.0)
+                            .strong()
+                            .color(Color32::from_rgb(235, 239, 245)),
+                    );
+                    ui.label(
+                        RichText::new(format!(
+                            "{} · {} strokes",
+                            relative_time(page.updated_at),
+                            page.stroke_count
+                        ))
+                        .size(11.0)
+                        .color(Color32::from_rgb(150, 162, 178)),
+                    );
+                });
+            });
+    })
+    .response
+    .interact(Sense::click())
+}
+
+fn relative_time(updated_at_ms: u128) -> String {
+    let now = unix_millis();
+    if updated_at_ms == 0 || updated_at_ms > now {
+        return "just now".to_owned();
+    }
+
+    let seconds = (now - updated_at_ms) / 1000;
+    match seconds {
+        0..=59 => "just now".to_owned(),
+        60..=3599 => format!("{} min ago", seconds / 60),
+        3600..=86_399 => format!("{} hours ago", seconds / 3600),
+        _ => format!("{} days ago", seconds / 86_400),
     }
 }
 

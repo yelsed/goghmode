@@ -3,6 +3,7 @@ mod app_install;
 mod drawing;
 mod export;
 mod mobile_server;
+mod pages;
 mod prompt;
 mod skill;
 

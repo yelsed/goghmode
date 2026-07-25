@@ -3,7 +3,9 @@ import SwiftUI
 
 struct PencilCanvasView: UIViewRepresentable {
     @Binding var drawing: PKDrawing
-    @Binding var clearSignal: Int
+    /// Bumped whenever the canvas should adopt `drawing` wholesale — clearing
+    /// it, or switching to another page.
+    @Binding var reloadSignal: Int
 
     var onDrawingChanged: (PKDrawing, CGSize) -> Void
 
@@ -32,7 +34,7 @@ struct PencilCanvasView: UIViewRepresentable {
         toolPicker.addObserver(canvasView)
         toolPicker.setVisible(true, forFirstResponder: canvasView)
 
-        context.coordinator.lastClearSignal = clearSignal
+        context.coordinator.lastReloadSignal = reloadSignal
         return canvasView
     }
 
@@ -45,18 +47,16 @@ struct PencilCanvasView: UIViewRepresentable {
             canvasView.becomeFirstResponder()
         }
 
-        if context.coordinator.lastClearSignal != clearSignal {
-            context.coordinator.lastClearSignal = clearSignal
-            canvasView.drawing = PKDrawing()
-            drawing = canvasView.drawing
-            onDrawingChanged(canvasView.drawing, canvasView.bounds.size)
+        if context.coordinator.lastReloadSignal != reloadSignal {
+            context.coordinator.lastReloadSignal = reloadSignal
+            canvasView.drawing = drawing
             return
         }
     }
 
     final class Coordinator: NSObject, PKCanvasViewDelegate {
         var parent: PencilCanvasView
-        var lastClearSignal = 0
+        var lastReloadSignal = 0
 
         // Held here on purpose: a released PKToolPicker takes the palette with it.
         let toolPicker: PKToolPicker = {

@@ -110,3 +110,12 @@ Options, cheapest first:
 - Show a QR code for the mobile URL so re-pairing is a two-second job and drift stops mattering.
 
 The QR code is the one that makes the problem irrelevant rather than merely visible.
+
+## 5. Obsidian link
+
+I also want there to be a link to Obsidian. That is for later.
+
+`docs/ai-field-notebook-vision.md` already sketches the shape: Obsidian as a storage and review layer
+rather than a capture surface, with a page becoming a markdown note with metadata plus a linked image
+export. Multi-page is what gives it something to link to — a page id is a stable name for a note, which
+a single overwritten `latest.*` never was. So this waits on item 1, not on anything else.

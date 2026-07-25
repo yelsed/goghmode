@@ -4,6 +4,7 @@
 /drawings/latest.json
 /drawings/latest.png
 /drawings/latest.svg
+/drawings/pages/
 
 # Local editor and OS files
 .DS_Store

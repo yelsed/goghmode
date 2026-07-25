@@ -24,20 +24,27 @@ is deferred product work, parked until that loop is boring and reliable. Source:
 The highest-value item. Doubt about whether written work survives is enough to stop
 someone writing.
 
-- [ ] Decide the five open questions in [OPEN-QUESTIONS](specs/OPEN-QUESTIONS.md)
+- [x] Decide the five open questions in [OPEN-QUESTIONS](specs/OPEN-QUESTIONS.md)
       (does `latest.*` keep its meaning, where history lives, who owns page
       identity, what the overview shows, deletion and renaming).
-- [ ] Add a page identifier to `DrawingSnapshot`; bump `schemaVersion` to 2 and
-      `validate_snapshot` with it — see [export-contract](specs/components/export-contract.md).
-- [ ] Update all three clients to send the new field:
+- [x] Add a page identifier to `DrawingSnapshot`. `schemaVersion` goes to 2, but
+      `validate_snapshot` accepts `{1, 2}` rather than bumping — refusing version 1
+      would break every installed companion. See
+      [export-contract](specs/components/export-contract.md).
+- [x] Update all three clients to send the new field:
       [desktop-canvas](specs/pages/desktop-canvas.md),
       [mobile-web-canvas](specs/pages/mobile-web-canvas.md),
       [ipad-companion](specs/pages/ipad-companion.md).
-- [ ] Mac writes page history **alongside an unchanged `latest.*`**, so `/goghmode`
+- [x] Mac writes page history **alongside an unchanged `latest.*`**, so `/goghmode`
       and every other consumer keeps working.
-- [ ] iPad gets a page switcher over locally-held pages.
-- [ ] Defer Mac-side browsing until there is a reason to read history back — the
-      server has no read endpoint today.
+- [x] iPad gets a page switcher over locally-held pages.
+- [x] Mac-side browsing, brought forward rather than deferred: the Mac owns the
+      directory and reads it directly, so no read endpoint was needed.
+- [ ] Deletion and renaming. Deliberately outside the first slice; when it lands it
+      moves pages to `pages/.trash/<id>/` rather than unlinking, so undo is a rename.
+- [ ] Retention. Pages are kept forever and nothing expires them. ~40 KB per page,
+      overwritten in place, so there is no storage pressure to manage — and deleting
+      handwritten notes on a timer would re-create the fear this phase removes.
 
 ### Phase 2 — Pairing without copy-paste
 Independent of Phase 1; can be done at any time.

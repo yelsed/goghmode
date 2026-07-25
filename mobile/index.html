@@ -265,8 +265,21 @@
   <script>
     const BACKGROUND = "rgb(250, 249, 244)";
     const INK = "rgb(30, 35, 48)";
-    const SCHEMA_VERSION = 1;
+    const SCHEMA_VERSION = 2;
     const LOGICAL_FILES = { json: "drawings/latest.json", svg: "drawings/latest.svg", png: "drawings/latest.png" };
+    const PAGE_ID_KEY = "goghmode-page-id";
+
+    // This companion ships inside the Mac binary, so it always matches its own
+    // server and can send a page without probing for support. One browser keeps
+    // one page: it is the quick-capture surface, not the notebook.
+    function pageId() {
+      let stored = localStorage.getItem(PAGE_ID_KEY);
+      if (!stored) {
+        stored = "browser-" + Math.random().toString(16).slice(2, 10);
+        localStorage.setItem(PAGE_ID_KEY, stored);
+      }
+      return stored;
+    }
 
     const canvas = document.getElementById("canvas");
     const context = canvas.getContext("2d");
@@ -334,6 +347,7 @@
       const allStrokes = activeStroke && activeStroke.points.length > 0 ? strokes.concat([activeStroke]) : strokes.slice();
       return {
         schemaVersion: SCHEMA_VERSION,
+        page: { id: pageId(), title: "Browser companion" },
         canvas: { width: canvas.width, height: canvas.height, background: BACKGROUND },
         strokes: allStrokes.map((stroke) => ({
           id: stroke.id,

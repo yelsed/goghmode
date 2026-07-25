@@ -30,8 +30,11 @@ fn mobile_manifest_is_installable_standalone() {
 fn mobile_index_exports_existing_schema_contract() {
     let index = read_asset("mobile/index.html");
 
-    assert!(index.contains("const SCHEMA_VERSION = 1"));
+    // Shipped inside the same binary as its server, so it can move to the
+    // current version without a compatibility dance.
+    assert!(index.contains("const SCHEMA_VERSION = 2"));
     assert!(index.contains("schemaVersion"));
+    assert!(index.contains("page: { id: pageId()"));
     assert!(index.contains("drawings/latest.json"));
     assert!(index.contains("drawings/latest.svg"));
     assert!(index.contains("drawings/latest.png"));

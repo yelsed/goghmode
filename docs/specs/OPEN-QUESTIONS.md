@@ -8,32 +8,24 @@
 ## Open
 
 ### Multiple pages and history
-All five must be answered before Phase 1 in [PLANNING.md](../PLANNING.md) can start.
-They are entangled — answering one in isolation forces the others.
+Four of the five are answered; see **Resolved**. What remains:
 
-- [ ] **Does `latest.*` keep meaning "the most recently touched page"?** Keeping it
-      is what stops `/goghmode` and every other consumer from breaking. Strong
-      default: yes, keep it and add history *alongside*. Affects
-      [export-contract](components/export-contract.md).
-- [ ] **Where does history live?** `drawings/pages/<id>/{json,svg,png}` plus an index
-      file, versus dated filenames. An index is easier to list and harder to keep
-      consistent. Affects [export-contract](components/export-contract.md).
-- [ ] **Who owns page identity — iPad or Mac?** The iPad knows which page the user is
-      on; the Mac owns the directory. The schema has no page identifier today, so
-      `schemaVersion` goes to 2 and `validate_snapshot` moves with it. Affects all
-      three page specs.
-- [ ] **What does the overview actually show?** Thumbnails of pages held locally on
-      the iPad, or a view of what the Mac holds? The second needs a read endpoint
-      the server does not have. Affects
-      [mobile-server-api](components/mobile-server-api.md) and
-      [ipad-companion](pages/ipad-companion.md).
-- [ ] **Deletion and renaming** — a write-only design never had to answer this.
+- [ ] **Deletion and renaming** — a write-only design never had to answer this. The
+      layout leaves room: deletion moves a page to `pages/.trash/<id>/` rather than
+      unlinking, which puts it one level deeper than the `pages/*/page.json` glob the
+      index is rebuilt from, so a trashed page drops out without a filter.
+- [ ] **Retention.** Shipped as "kept forever, nothing expires". If a gate is ever
+      added it should be opt-in, default forever, recoverable, and never sweep a page
+      the user promoted or renamed.
 
 ### What the Mac app becomes
-- [ ] Three options, leaning toward the second, decided once multi-page exists:
-      keep both canvases and share the toolset · **demote the canvas and promote the
-      bridge** (status, page browser, QR pairing, quick sketch fallback) · headless
-      with a menu bar item. Affects [desktop-canvas](pages/desktop-canvas.md).
+- [x] **Decided: demote the canvas, promote the bridge.** Not on taste — `src/app.rs`
+      was already writing `latest.*` on every stroke end, racing the iPad for the
+      agent's only input file, so once every writer owns a page the Mac canvas is
+      structurally just another source. It now writes `mac-scratch` and gained a page
+      browser, a port warning, and a reveal-folder button; the quick sketch canvas
+      stays. QR pairing is still Phase 2. Affects
+      [desktop-canvas](pages/desktop-canvas.md).
 
 ### Network exposure and pairing
 - [ ] Should local-network access stay enabled by the secret URL alone, or should the
@@ -46,11 +38,6 @@ They are entangled — answering one in isolation forces the others.
       question mostly moot.
 
 ### Schema and rendering divergences
-- [ ] When `schemaVersion` goes to 2, does the Mac still accept version 1 uploads?
-      Three client implementations cannot ship simultaneously.
-- [ ] Should the PNG rasterizer honour `stroke.color`? Today it does not, so iPad
-      colour survives only in the SVG and JSON. Affects
-      [export-contract](components/export-contract.md).
 - [ ] Should `canvas.background` be honoured on export or removed from the schema?
       Clients send it and nothing uses it.
 
@@ -60,6 +47,39 @@ They are entangled — answering one in isolation forces the others.
 
 ## Resolved
 
+- [x] **Does `latest.*` keep meaning "the most recently touched page"?** → Yes, and
+      it is a byte-identical mirror of the page written last. Forced rather than
+      chosen: `src/skill.rs` is written to `~/.claude/skills/` only when the user runs
+      `install-skill`, so installed copies can never be updated in step with this app.
+      Propagated to [export-contract](components/export-contract.md).
+- [x] **Where does history live?** → `drawings/pages/<id>/page.{json,svg,png}` plus
+      `pages/index.json`, and the index is **rebuilt by directory scan** after every
+      write rather than maintained incrementally, so it cannot drift and needs no
+      repair path. Dated filenames were rejected because they encode identity in the
+      name, and the iPad re-uploads a whole page on every stroke — a stable directory
+      makes that an idempotent overwrite. Propagated to
+      [export-contract](components/export-contract.md).
+- [x] **Who owns page identity — iPad or Mac?** → The client that created the page
+      mints the id. The iPad works offline and retries uploads, so a Mac-minted id
+      would leave an offline page unnameable and make retries duplicate-prone. The id
+      becomes a directory name, so the server treats it as untrusted input and
+      restricts it to `[A-Za-z0-9_-]{1,64}`. Propagated to all three page specs.
+- [x] **What does the overview actually show?** → Both, without a read endpoint. The
+      iPad lists its own local pages; the Mac reads its own directory directly. No
+      server-side listing was needed. Propagated to
+      [ipad-companion](pages/ipad-companion.md) and
+      [desktop-canvas](pages/desktop-canvas.md).
+- [x] **When `schemaVersion` goes to 2, does the Mac still accept version 1 uploads?**
+      → Yes. The server accepts `{1, 2}` and files version 1 under a reserved `legacy`
+      page. A bare bump would have bricked every installed companion build. A new
+      `GET {prefix}capabilities` lets a client ask what a Mac takes; an older Mac
+      404s that route, which the iPad reads as "version 1 only". Propagated to
+      [export-contract](components/export-contract.md) and
+      [mobile-server-api](components/mobile-server-api.md).
+- [x] **Should the PNG rasterizer honour `stroke.color`?** → Yes. It hardcoded
+      `#111827` while the SVG honoured the colour, so every thumbnail of a colour
+      drawing rendered black — which only became visible once the Mac grew a page
+      browser. Propagated to [export-contract](components/export-contract.md).
 - [x] **QR code, short code, or manual URL entry for pairing?** → Manual URL entry,
       for now. Shipped as a text field on iPad and a Copy mobile URL button on the
       Mac. QR remains Phase 2 — it is the fix that makes the stale-port trap

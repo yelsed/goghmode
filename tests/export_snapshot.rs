@@ -4,9 +4,12 @@
 mod drawing;
 #[path = "../src/export.rs"]
 mod export;
+#[path = "../src/pages.rs"]
+mod pages;
 
-use drawing::Drawing;
+use drawing::{Drawing, CURRENT_SCHEMA_VERSION, MAC_SCRATCH_PAGE_ID};
 use export::{snapshot_to_rgba, write_snapshot};
+use pages::{list_pages, page_id_is_safe, write_page};
 use std::fs;
 
 #[test]
@@ -25,7 +28,7 @@ fn multi_point_stroke_writes_json_svg_and_png() {
 
     let json: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&files.json).unwrap()).unwrap();
-    assert_eq!(json["schemaVersion"], 1);
+    assert_eq!(json["schemaVersion"], CURRENT_SCHEMA_VERSION);
     assert_eq!(json["files"]["svg"], "drawings/latest.svg");
     assert_eq!(json["strokes"].as_array().unwrap().len(), 1);
 
@@ -82,6 +85,96 @@ fn write_snapshot_leaves_no_temporary_files_after_success() {
         .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
         .count();
     assert_eq!(temporary_count, 0);
+}
+
+#[test]
+fn mac_canvas_writes_its_own_page_instead_of_only_latest() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut drawing = Drawing::new(60.0, 40.0);
+    drawing.begin_stroke(5.0, 5.0, 0.5, 1);
+    drawing.push_point(30.0, 20.0, 0.5, 2);
+    drawing.finish_stroke();
+
+    write_page(&drawing.snapshot(), temp.path()).unwrap();
+
+    let page_dir = temp.path().join("pages").join(MAC_SCRATCH_PAGE_ID);
+    assert!(page_dir.join("page.json").exists());
+    assert!(page_dir.join("page.svg").exists());
+    assert!(page_dir.join("page.png").exists());
+    assert!(temp.path().join("latest.json").exists());
+}
+
+#[test]
+fn rebuilt_index_lists_every_page_newest_first() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut drawing = Drawing::new(40.0, 40.0);
+    drawing.begin_stroke(2.0, 2.0, 0.5, 1);
+    drawing.push_point(20.0, 20.0, 0.5, 2);
+    drawing.finish_stroke();
+
+    let mut snapshot = drawing.snapshot();
+    snapshot.page = Some(drawing::PageRef {
+        id: "older".to_owned(),
+        title: Some("Older".to_owned()),
+    });
+    write_page(&snapshot, temp.path()).unwrap();
+    snapshot.page = Some(drawing::PageRef {
+        id: "newer".to_owned(),
+        title: None,
+    });
+    write_page(&snapshot, temp.path()).unwrap();
+
+    let pages = list_pages(temp.path());
+
+    assert_eq!(pages.len(), 2);
+    assert!(pages[0].updated_at >= pages[1].updated_at);
+    assert_eq!(pages.iter().filter(|page| page.stroke_count == 1).count(), 2);
+    assert_eq!(
+        pages
+            .iter()
+            .find(|page| page.page_id == "older")
+            .and_then(|page| page.title.clone()),
+        Some("Older".to_owned())
+    );
+
+    let index: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(temp.path().join("pages").join("index.json")).unwrap())
+            .unwrap();
+    assert_eq!(index["pages"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn page_ids_are_restricted_to_names_that_cannot_leave_the_pages_directory() {
+    assert!(page_id_is_safe("note-1"));
+    assert!(page_id_is_safe("A_b-9"));
+
+    assert!(!page_id_is_safe(""));
+    assert!(!page_id_is_safe("../escape"));
+    assert!(!page_id_is_safe("a/b"));
+    assert!(!page_id_is_safe("."));
+    assert!(!page_id_is_safe(&"x".repeat(65)));
+}
+
+#[test]
+fn png_export_keeps_the_stroke_colour_the_svg_already_honoured() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut drawing = Drawing::new(30.0, 20.0);
+    drawing.begin_stroke(2.0, 2.0, 0.5, 1);
+    drawing.push_point(25.0, 15.0, 0.5, 2);
+    drawing.finish_stroke();
+
+    let mut snapshot = drawing.snapshot();
+    snapshot.strokes[0].color = "#cc0000".to_owned();
+    write_snapshot(&snapshot, temp.path()).unwrap();
+
+    let image = snapshot_to_rgba(&snapshot);
+
+    assert!(
+        image
+            .pixels()
+            .any(|pixel| pixel.0 == [204, 0, 0, 255]),
+        "a red stroke should produce red pixels, not the default ink"
+    );
 }
 
 #[test]

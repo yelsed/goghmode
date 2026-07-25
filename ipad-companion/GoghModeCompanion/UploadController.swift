@@ -28,10 +28,21 @@ final class UploadController: ObservableObject {
 
     @Published private(set) var status: Status = .idle
 
+    /// False once a Mac has told us it predates pages. The page switcher hides
+    /// itself rather than pretending a page switch means anything there.
+    @Published private(set) var pagesSupported = true
+
     private let client: GoghModeClient
     private var pendingUpload: Task<Void, Never>?
     private var lastSnapshot: DrawingSnapshot?
     private var lastEndpointText = ""
+    private var capabilitiesByEndpoint: [String: GoghModeCapabilities] = [:]
+
+    var pagesUnsupportedMessage: String? {
+        pagesSupported
+            ? nil
+            : "This Mac runs an older GoghMode, so pages are off. Update the Mac app."
+    }
 
     var canRetry: Bool {
         if case .failed = status {
@@ -92,20 +103,43 @@ final class UploadController: ObservableObject {
         lastEndpointText = endpointText
     }
 
+    /// One probe per endpoint, cached. Asking the Mac what it takes is cheaper
+    /// and clearer than sending version 2 and reading the rejection.
+    private func resolvedCapabilities(
+        for endpoint: GoghModeEndpoint,
+        endpointText: String,
+        client: GoghModeClient
+    ) async -> GoghModeCapabilities {
+        if let known = capabilitiesByEndpoint[endpointText] {
+            return known
+        }
+        let capabilities = await client.capabilities(of: endpoint)
+        capabilitiesByEndpoint[endpointText] = capabilities
+        pagesSupported = capabilities.supportsPages
+        return capabilities
+    }
+
     private func upload(_ snapshot: DrawingSnapshot, endpointText: String, client: GoghModeClient) async throws {
         guard let endpoint = GoghModeEndpoint(endpointText) else {
             throw UploadError.invalidEndpoint
         }
 
+        let capabilities = await resolvedCapabilities(
+            for: endpoint,
+            endpointText: endpointText,
+            client: client
+        )
+        let outgoing = capabilities.supportsPages ? snapshot : snapshot.withoutPage()
+
         status = .saving
         do {
-            try await client.upload(snapshot, to: endpoint)
+            try await client.upload(outgoing, to: endpoint)
         } catch let error as URLError where error.isWorthRetrying {
             // URLSession can hand back a pooled socket the Mac already closed,
             // which surfaces as `networkConnectionLost` even though the Mac is
             // reachable. One retry separates a dead socket from a dead server.
             try await Task.sleep(for: .milliseconds(300))
-            try await client.upload(snapshot, to: endpoint)
+            try await client.upload(outgoing, to: endpoint)
         }
         status = .saved(Date())
     }

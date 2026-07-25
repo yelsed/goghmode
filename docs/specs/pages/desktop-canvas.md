@@ -129,11 +129,16 @@ Shipped. Only remaining work is listed.
 | **Total** | — |
 
 ## Tasks
-- [ ] Warn when the server did not get port 8787 instead of silently using another.
-- [ ] Decide what this window becomes once the iPad is the primary surface — see
-      Phase 3 in [PLANNING.md](../../PLANNING.md).
+- [x] Warn when the server did not get port 8787 instead of silently using another.
+- [x] Decide what this window becomes once the iPad is the primary surface: the
+      canvas is demoted to one page source among several — it writes `mac-scratch`
+      instead of racing the iPad for `latest.*` — and the window gains a **Pages**
+      view, a thumbnail grid where clicking a page points `drawings/latest.*` at it.
+      QR pairing remains Phase 2.
 
 ## Open questions
-- Should Undo be repeatable beyond one step, and should there be a redo?
-- Should the desktop canvas gain colour selection, given the PNG exporter currently
-  ignores `stroke.color`?
+- Should Undo be repeatable beyond one step, and should there be a redo? More
+  pressing now that a page outlives the session that drew it.
+- Should the desktop canvas gain colour selection? The PNG exporter now honours
+  `stroke.color`, so the reason not to has gone; the canvas still draws every stroke
+  in one ink.
