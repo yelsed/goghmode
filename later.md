@@ -111,7 +111,7 @@ Options, cheapest first:
 
 The QR code is the one that makes the problem irrelevant rather than merely visible.
 
-## 4. Obsidian link
+## 5. Obsidian link
 
 I also want there to be a link to Obsidian. That is for later.
 

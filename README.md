@@ -80,6 +80,24 @@ launch and a Spotlight launch wrote to different places, and each terminal direc
 separate history. If a stale `drawings/` directory is still lying around from that, it is safe to
 delete.
 
+## Pages
+
+Every save also keeps its own copy, so nothing is overwritten out of existence:
+
+```text
+~/Pictures/GoghMode/drawings/pages/<pageId>/page.png
+~/Pictures/GoghMode/drawings/pages/<pageId>/page.svg
+~/Pictures/GoghMode/drawings/pages/<pageId>/page.json
+~/Pictures/GoghMode/drawings/pages/index.json
+```
+
+`latest.*` keeps its meaning — the page written most recently — so the
+`/goghmode` skill and anything else reading those three files is unaffected.
+The iPad names its own pages, the Mac canvas writes `mac-scratch`, and the
+browser companion gets one page per browser.
+
+Pages are kept forever. Nothing deletes them on a timer.
+
 ## Desktop controls
 
 - Draw directly on the paper canvas.
@@ -91,6 +109,9 @@ delete.
 - `Send to Claude` copies the prompt text for Claude or another AI terminal.
 - `Print prompt` writes the prompt to the terminal.
 - `Copy mobile URL` copies the local phone URL.
+- `Canvas` / `Pages` switches between drawing and browsing saved pages.
+- In `Pages`, click a page to point `drawings/latest.*` at it; `Reveal drawings
+  folder` opens the folder in Finder.
 
 ## Use with Claude Code
 

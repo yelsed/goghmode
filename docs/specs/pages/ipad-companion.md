@@ -162,7 +162,11 @@ Shipped. Only remaining work is listed.
 - [ ] Replace URL paste with QR scanning; it also removes the stale-port trap.
 
 ## Open questions
-- Should stroke ids survive edits, i.e. should page identity and stroke identity be
-  decided together in Phase 1?
-- Should the app hold pages locally and switch between them, or mirror what the Mac
-  holds? The Mac has no read endpoint today.
+- Should stroke ids survive edits? Page identity is now stable — a client-minted
+  UUID, immutable for the life of the page — but stroke ids are still regenerated as
+  `stroke-{n}` on every snapshot. Nothing downstream depends on them yet.
+- ~~Should the app hold pages locally and switch between them, or mirror what the Mac
+  holds?~~ **Answered: locally.** `PageStore` persists each page's `PKDrawing` to the
+  app container and the overview renders thumbnails from those, so switching works
+  with the Mac closed and no read endpoint was needed. Pages that live only on the
+  Mac (`mac-scratch`, the browser companion's) are not visible here.

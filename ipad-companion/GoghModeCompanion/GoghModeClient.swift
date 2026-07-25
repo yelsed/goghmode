@@ -2,6 +2,7 @@ import Foundation
 
 struct GoghModeEndpoint: Equatable {
     let saveURL: URL
+    let capabilitiesURL: URL
 
     init?(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -19,24 +20,58 @@ struct GoghModeEndpoint: Equatable {
         }
 
         if path.hasSuffix("/save") {
-            components.percentEncodedPath = path
-        } else {
-            if !path.hasSuffix("/") {
-                path += "/"
-            }
-            components.percentEncodedPath = path + "save"
+            path.removeLast("save".count)
+        }
+        if !path.hasSuffix("/") {
+            path += "/"
         }
 
-        guard let url = components.url else {
+        let root = path
+        components.percentEncodedPath = root + "save"
+        guard let save = components.url else {
+            return nil
+        }
+        components.percentEncodedPath = root + "capabilities"
+        guard let capabilities = components.url else {
             return nil
         }
 
-        saveURL = url
+        saveURL = save
+        capabilitiesURL = capabilities
+    }
+}
+
+/// What a Mac says it accepts. A Mac from before pages has no such route and
+/// answers 404, which the app reads as "schema version 1 only".
+struct GoghModeCapabilities: Codable, Equatable {
+    let schemaVersions: [Int]
+    let features: [String]
+
+    static let pagelessMac = GoghModeCapabilities(
+        schemaVersions: [pagelessSchemaVersion],
+        features: []
+    )
+
+    var supportsPages: Bool {
+        schemaVersions.contains(currentSchemaVersion)
     }
 }
 
 struct GoghModeClient {
     var session: URLSession = .shared
+
+    /// Asks the Mac what it accepts. Probing beats inferring from a rejection:
+    /// a 404 here is an old Mac, and anything else unreadable is treated the
+    /// same way, so the drawing still gets through as version 1.
+    func capabilities(of endpoint: GoghModeEndpoint) async -> GoghModeCapabilities {
+        guard let (data, response) = try? await session.data(from: endpoint.capabilitiesURL),
+              let httpResponse = response as? HTTPURLResponse,
+              (200..<300).contains(httpResponse.statusCode),
+              let capabilities = try? JSONDecoder().decode(GoghModeCapabilities.self, from: data) else {
+            return .pagelessMac
+        }
+        return capabilities
+    }
 
     func upload(_ snapshot: DrawingSnapshot, to endpoint: GoghModeEndpoint) async throws {
         var request = URLRequest(url: endpoint.saveURL)

@@ -52,6 +52,7 @@ final class DrawingSnapshotTests: XCTestCase {
     func testSnapshotEncodingMatchesRustSchema() throws {
         let snapshot = DrawingSnapshot(
             schemaVersion: 1,
+            page: nil,
             canvas: CanvasSize(width: 320, height: 240, background: "#ffffff"),
             strokes: [
                 Stroke(
@@ -98,5 +99,73 @@ final class DrawingSnapshotTests: XCTestCase {
 
     func testEndpointRejectsNonHttpURL() {
         XCTAssertNil(GoghModeEndpoint("file:///tmp/latest.json"))
+    }
+
+    func testEndpointExposesCapabilitiesBesideSave() throws {
+        let fromRoot = try XCTUnwrap(GoghModeEndpoint("http://192.168.1.10:8787/abc123/"))
+        let fromSaveURL = try XCTUnwrap(GoghModeEndpoint("http://192.168.1.10:8787/abc123/save"))
+
+        XCTAssertEqual(
+            fromRoot.capabilitiesURL.absoluteString,
+            "http://192.168.1.10:8787/abc123/capabilities"
+        )
+        XCTAssertEqual(fromSaveURL.capabilitiesURL, fromRoot.capabilitiesURL)
+        XCTAssertEqual(fromSaveURL.saveURL, fromRoot.saveURL)
+    }
+
+    func testPageSnapshotEncodesPageAtSchemaVersionTwo() throws {
+        let snapshot = DrawingSnapshot.empty(
+            canvasSize: CGSize(width: 320, height: 240),
+            page: PageRef(id: "note-1", title: "Server sketch")
+        )
+
+        let data = try JSONEncoder().encode(snapshot)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let page = try XCTUnwrap(object["page"] as? [String: Any])
+
+        XCTAssertEqual(object["schemaVersion"] as? Int, 2)
+        XCTAssertEqual(page["id"] as? String, "note-1")
+        XCTAssertEqual(page["title"] as? String, "Server sketch")
+    }
+
+    func testDowngradedSnapshotDropsThePageForAMacThatPredatesThem() throws {
+        let snapshot = DrawingSnapshot.empty(
+            canvasSize: CGSize(width: 320, height: 240),
+            page: PageRef(id: "note-1", title: "Server sketch")
+        )
+
+        let data = try JSONEncoder().encode(snapshot.withoutPage())
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        XCTAssertEqual(object["schemaVersion"] as? Int, 1)
+        XCTAssertNil(object["page"])
+        XCTAssertNotNil(object["canvas"])
+    }
+
+    func testCapabilitiesDecodeAndReportPageSupport() throws {
+        let json = Data(#"{"schemaVersions":[1,2],"features":["pages"]}"#.utf8)
+
+        let capabilities = try JSONDecoder().decode(GoghModeCapabilities.self, from: json)
+
+        XCTAssertTrue(capabilities.supportsPages)
+        XCTAssertFalse(GoghModeCapabilities.pagelessMac.supportsPages)
+    }
+
+    @MainActor
+    func testPageStoreKeepsPagesAcrossReloadsNewestFirst() throws {
+        let storeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("goghmode-pages-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: storeURL) }
+
+        let store = PageStore(storeURL: storeURL)
+        let firstPageID = store.selectedPageID
+        let secondPage = store.addPage()
+        store.updateSelectedPage(with: PKDrawing())
+
+        let reloaded = PageStore(storeURL: storeURL)
+
+        XCTAssertEqual(reloaded.pages.count, 2)
+        XCTAssertEqual(reloaded.pages.first?.id, secondPage.id)
+        XCTAssertTrue(reloaded.pages.contains { $0.id == firstPageID })
     }
 }

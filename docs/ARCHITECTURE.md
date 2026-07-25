@@ -81,7 +81,8 @@ through one function.
 
 ```jsonc
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
+  "page":    { "id": "9F2C4A1B", "title": "Server sketch" },  // absent at version 1
   "canvas":  { "width": 1100.0, "height": 699.5, "background": "#ffffff" },
   "strokes": [
     { "id": "stroke-1", "color": "#111827", "width": 4.0,
@@ -89,6 +90,10 @@ through one function.
   ]
 }
 ```
+
+The server accepts `{1, 2}`. Version 1 has no `page` and is filed under a reserved
+`legacy` page — that is what lets three client implementations move at different
+speeds instead of all at once.
 
 It is mirrored by hand in two other languages:
 

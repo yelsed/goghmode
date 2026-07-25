@@ -24,12 +24,32 @@ pub struct CanvasSize {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PageRef {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DrawingSnapshot {
     #[serde(rename = "schemaVersion")]
     pub schema_version: u8,
+    /// Absent on schema version 1 clients, which predate pages entirely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<PageRef>,
     pub canvas: CanvasSize,
     pub strokes: Vec<Stroke>,
 }
+
+pub const CURRENT_SCHEMA_VERSION: u8 = 2;
+
+/// The page the Mac canvas owns. Without it the desktop app keeps overwriting
+/// whichever page the iPad sent last.
+pub const MAC_SCRATCH_PAGE_ID: &str = "mac-scratch";
+
+/// Where snapshots from schema version 1 clients land, so they gain history
+/// without knowing pages exist.
+pub const LEGACY_PAGE_ID: &str = "legacy";
 
 pub struct Drawing {
     canvas: CanvasSize,
@@ -142,7 +162,11 @@ impl Drawing {
         }
 
         DrawingSnapshot {
-            schema_version: 1,
+            schema_version: CURRENT_SCHEMA_VERSION,
+            page: Some(PageRef {
+                id: MAC_SCRATCH_PAGE_ID.to_owned(),
+                title: Some("Mac scratch".to_owned()),
+            }),
             canvas: self.canvas.clone(),
             strokes,
         }

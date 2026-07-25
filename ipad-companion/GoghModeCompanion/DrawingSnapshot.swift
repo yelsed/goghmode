@@ -3,11 +3,22 @@ import Foundation
 import PencilKit
 import UIKit
 
+/// Mirrors `DrawingSnapshot` in `src/drawing.rs`, validated by `check_snapshot`
+/// in `src/mobile_server.rs`. The two definitions must stay in step.
 struct DrawingSnapshot: Codable, Equatable {
     let schemaVersion: Int
+    let page: PageRef?
     let canvas: CanvasSize
     let strokes: [Stroke]
 }
+
+struct PageRef: Codable, Equatable {
+    let id: String
+    let title: String?
+}
+
+let currentSchemaVersion = 2
+let pagelessSchemaVersion = 1
 
 struct CanvasSize: Codable, Equatable {
     let width: Double
@@ -30,9 +41,10 @@ struct Point: Codable, Equatable {
 }
 
 extension DrawingSnapshot {
-    static func empty(canvasSize: CGSize) -> DrawingSnapshot {
+    static func empty(canvasSize: CGSize, page: PageRef? = nil) -> DrawingSnapshot {
         DrawingSnapshot(
-            schemaVersion: 1,
+            schemaVersion: currentSchemaVersion,
+            page: page,
             canvas: CanvasSize(
                 width: Double(max(1.0, canvasSize.width)),
                 height: Double(max(1.0, canvasSize.height)),
@@ -42,7 +54,22 @@ extension DrawingSnapshot {
         )
     }
 
-    static func fromPencilDrawing(_ drawing: PKDrawing, canvasSize: CGSize) -> DrawingSnapshot {
+    /// A Mac that predates pages rejects anything above version 1, so the app
+    /// sends the same drawing without its page rather than not at all.
+    func withoutPage() -> DrawingSnapshot {
+        DrawingSnapshot(
+            schemaVersion: pagelessSchemaVersion,
+            page: nil,
+            canvas: canvas,
+            strokes: strokes
+        )
+    }
+
+    static func fromPencilDrawing(
+        _ drawing: PKDrawing,
+        canvasSize: CGSize,
+        page: PageRef? = nil
+    ) -> DrawingSnapshot {
         let width = max(1.0, canvasSize.width)
         let height = max(1.0, canvasSize.height)
         let strokes = drawing.strokes.enumerated().compactMap { strokeIndex, pencilStroke -> Stroke? in
@@ -70,7 +97,8 @@ extension DrawingSnapshot {
         }
 
         return DrawingSnapshot(
-            schemaVersion: 1,
+            schemaVersion: currentSchemaVersion,
+            page: page,
             canvas: CanvasSize(width: Double(width), height: Double(height), background: "#ffffff"),
             strokes: strokes
         )

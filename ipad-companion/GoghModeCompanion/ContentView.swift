@@ -5,10 +5,12 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("goghModeEndpoint") private var endpointText = ""
     @StateObject private var uploader = UploadController()
+    @StateObject private var pageStore = PageStore()
     @State private var drawing = PKDrawing()
     @State private var canvasSize = CGSize(width: 1024, height: 1366)
     @State private var clearSignal = 0
     @State private var showingSettings = false
+    @State private var showingPages = false
 
     private var endpoint: GoghModeEndpoint? {
         GoghModeEndpoint(endpointText)
@@ -30,7 +32,51 @@ struct ContentView: View {
             if newPhase == .active {
                 uploader.retryIfOffline()
             }
+            // Leaving is when work is most likely to be lost: the app can be
+            // killed in the background before the debounce fires.
+            if newPhase == .background {
+                uploadCurrentPage()
+            }
         }
+        .onAppear {
+            drawing = pageStore.selectedDrawing
+        }
+    }
+
+    private func snapshot(of pencilDrawing: PKDrawing) -> DrawingSnapshot {
+        DrawingSnapshot.fromPencilDrawing(
+            pencilDrawing,
+            canvasSize: canvasSize,
+            page: pageStore.selectedPage?.pageRef
+        )
+    }
+
+    private func uploadCurrentPage() {
+        uploader.uploadNow(snapshot: snapshot(of: drawing), endpointText: endpointText)
+    }
+
+    private func switchTo(pageID: String) {
+        showingPages = false
+        guard pageID != pageStore.selectedPageID else { return }
+
+        // The outgoing page goes up before the canvas swaps, so switching away
+        // never leaves an edit behind.
+        pageStore.updateSelectedPage(with: drawing)
+        uploadCurrentPage()
+
+        pageStore.select(pageID)
+        drawing = pageStore.selectedDrawing
+        clearSignal += 1
+    }
+
+    private func addPage() {
+        showingPages = false
+        pageStore.updateSelectedPage(with: drawing)
+        uploadCurrentPage()
+
+        pageStore.addPage()
+        drawing = PKDrawing()
+        clearSignal += 1
     }
 
     private var setupView: some View {
@@ -79,11 +125,21 @@ struct ContentView: View {
         VStack(spacing: 0) {
             toolbar
 
+            if let message = uploader.pagesUnsupportedMessage {
+                Text(message)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+                    .background(.regularMaterial)
+            }
+
             GeometryReader { geometry in
-                PencilCanvasView(drawing: $drawing, clearSignal: $clearSignal) { newDrawing, newCanvasSize in
+                PencilCanvasView(drawing: $drawing, reloadSignal: $clearSignal) { newDrawing, newCanvasSize in
                     canvasSize = newCanvasSize == .zero ? geometry.size : newCanvasSize
-                    let snapshot = DrawingSnapshot.fromPencilDrawing(newDrawing, canvasSize: canvasSize)
-                    uploader.schedule(snapshot: snapshot, endpointText: endpointText)
+                    pageStore.updateSelectedPage(with: newDrawing)
+                    uploader.schedule(snapshot: snapshot(of: newDrawing), endpointText: endpointText)
                 }
                 .ignoresSafeArea(edges: .bottom)
                 .onAppear {
@@ -91,25 +147,53 @@ struct ContentView: View {
                 }
             }
         }
+        .sheet(isPresented: $showingPages) {
+            pageOverview
+        }
     }
 
     private var toolbar: some View {
         HStack(spacing: 12) {
             statusBadge
 
+            if uploader.pagesSupported {
+                Button {
+                    showingPages = true
+                } label: {
+                    Label(
+                        pageStore.selectedPage?.title ?? "Pages",
+                        systemImage: "square.stack"
+                    )
+                    .lineLimit(1)
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    addPage()
+                } label: {
+                    Label("New page", systemImage: "plus")
+                }
+                .buttonStyle(.bordered)
+            }
+
             Spacer()
 
             Button("Save Now") {
-                let snapshot = DrawingSnapshot.fromPencilDrawing(drawing, canvasSize: canvasSize)
-                uploader.uploadNow(snapshot: snapshot, endpointText: endpointText)
+                uploadCurrentPage()
             }
             .buttonStyle(.borderedProminent)
 
             Button("Clear") {
                 drawing = PKDrawing()
                 clearSignal += 1
-                let snapshot = DrawingSnapshot.empty(canvasSize: canvasSize)
-                uploader.uploadNow(snapshot: snapshot, endpointText: endpointText)
+                pageStore.updateSelectedPage(with: drawing)
+                uploader.uploadNow(
+                    snapshot: DrawingSnapshot.empty(
+                        canvasSize: canvasSize,
+                        page: pageStore.selectedPage?.pageRef
+                    ),
+                    endpointText: endpointText
+                )
             }
             .buttonStyle(.bordered)
 
@@ -121,6 +205,61 @@ struct ContentView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(.regularMaterial)
+    }
+
+    private var pageOverview: some View {
+        NavigationStack {
+            List(pageStore.pages) { page in
+                Button {
+                    switchTo(pageID: page.id)
+                } label: {
+                    HStack(spacing: 12) {
+                        thumbnail(for: page)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(page.title)
+                                .font(.body.weight(.medium))
+                            Text("\(page.drawing.strokes.count) strokes")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if page.id == pageStore.selectedPageID {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.tint)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+            .navigationTitle("Pages")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button("New page") {
+                        addPage()
+                    }
+                }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") {
+                        showingPages = false
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func thumbnail(for page: NotebookPage) -> some View {
+        let bounds = CGRect(origin: .zero, size: CGSize(width: 160, height: 110))
+        Image(uiImage: page.drawing.image(from: bounds, scale: 1))
+            .resizable()
+            .aspectRatio(contentMode: .fit)
+            .frame(width: 80, height: 55)
+            .background(Color.white)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.secondary.opacity(0.3))
+            )
     }
 
     private var statusBadge: some View {

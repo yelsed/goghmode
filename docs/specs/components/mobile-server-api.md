@@ -39,6 +39,7 @@ before matching.
 | GET / HEAD | `{prefix}manifest.webmanifest` | `application/manifest+json` |
 | GET / HEAD | `{prefix}service-worker.js` | `text/javascript` |
 | GET / HEAD | `{prefix}icon.svg` | `image/svg+xml` |
+| GET / HEAD | `{prefix}capabilities` | `{"schemaVersions":[1,2],"features":["pages"]}`, `application/json` |
 | GET / HEAD | `/{token}` (no trailing slash) | `308` redirect to `{prefix}` |
 | POST | `{prefix}save` | `200 {"ok":true}` · `400` with a reason · `500` on write failure |
 | POST | anything else | `405` |
@@ -71,7 +72,10 @@ an iPad.
 | Limit | Value |
 | --- | --- |
 | Body size | 4 MiB, checked on headers and on the declared `Content-Length` |
-| `schemaVersion` | exactly `1` |
+| `schemaVersion` | `1` or `2` |
+| `page` | required at version 2, absent at version 1 |
+| `page.id` | `[A-Za-z0-9_-]`, 1–64 characters |
+| `page.title` | ≤ 200 characters |
 | Canvas width / height | finite, `1.0 ..= 4096.0` |
 | `canvas.background` | ≤ 64 characters |
 | Stroke count | ≤ 4096 |
@@ -83,9 +87,24 @@ an iPad.
 
 Every rejection also logs `goghmode: rejected upload: {reason}` to stderr.
 
-On success it calls `crate::export::write_snapshot` with the drawings directory
-captured at server start — the Mac owning the output directory is what makes that
-possible. See [export-contract](export-contract.md).
+`page.id` is the sharpest edge here: it becomes a **directory name**, so it is
+checked against `[A-Za-z0-9_-]{1,64}` before anything joins it to a path. A test
+posts `../escape`, `a/b`, `""`, `/etc/passwd` and a 65-character id, and asserts each
+is refused and that nothing appears outside the drawings directory.
+
+Accepting `{1, 2}` rather than bumping to `2` is deliberate: refusing version 1 would
+break every already-installed companion, and the three clients cannot be updated
+together. Version 1 uploads carry no page and are filed under a reserved `legacy`
+page.
+
+`{prefix}capabilities` exists so a companion can ask what a Mac accepts instead of
+inferring it from a rejection. A Mac from before pages has no such route and answers
+404, which is itself the answer: the iPad drops the page field, sends version 1, and
+says so in the UI.
+
+On success it calls `crate::pages::write_page` with the drawings directory captured
+at server start — the Mac owning the output directory is what makes that possible.
+See [export-contract](export-contract.md).
 
 ## Design tokens
 Not applicable.

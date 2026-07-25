@@ -4,8 +4,12 @@ mod drawing;
 #[path = "../src/export.rs"]
 mod export;
 
+#[allow(dead_code)]
 #[path = "../src/mobile_server.rs"]
 mod mobile_server;
+#[allow(dead_code)]
+#[path = "../src/pages.rs"]
+mod pages;
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -216,4 +220,194 @@ fn local_mobile_server_rejects_invalid_snapshot_payloads() {
 
     assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
     assert!(!directory.path().join("latest.json").exists());
+}
+
+fn snapshot_body(schema_version: u8, page: &str) -> String {
+    format!(
+        r##"{{
+        "schemaVersion": {schema_version},
+        {page}
+        "canvas": {{ "width": 32, "height": 24, "background": "#ffffff" }},
+        "strokes": [
+            {{
+                "id": "mobile-1",
+                "color": "#111827",
+                "width": 4,
+                "points": [
+                    {{ "x": 2, "y": 3, "pressure": 0.5, "t": 10 }},
+                    {{ "x": 20, "y": 12, "pressure": 0.5, "t": 11 }}
+                ]
+            }}
+        ]
+    }}"##
+    )
+}
+
+fn save_snapshot(server: &MobileServer, body: &str) -> String {
+    let save_path = format!("{}save", path_from_url(server.url()));
+    http_post(server.url(), &save_path, body)
+}
+
+#[test]
+fn schema_version_one_snapshots_still_save_and_gain_a_legacy_page() {
+    let directory = tempfile::tempdir().unwrap();
+    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path()).unwrap();
+
+    let response = save_snapshot(&server, &snapshot_body(1, ""));
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"));
+    assert!(directory.path().join("latest.json").exists());
+    assert!(directory
+        .path()
+        .join("pages")
+        .join("legacy")
+        .join("page.json")
+        .exists());
+}
+
+#[test]
+fn schema_version_two_snapshots_are_stored_under_their_page_and_mirrored_to_latest() {
+    let directory = tempfile::tempdir().unwrap();
+    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path()).unwrap();
+
+    let response = save_snapshot(
+        &server,
+        &snapshot_body(2, r#""page": { "id": "note-1", "title": "Server sketch" },"#),
+    );
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"));
+    let page_dir = directory.path().join("pages").join("note-1");
+    assert!(page_dir.join("page.json").exists());
+    assert!(page_dir.join("page.svg").exists());
+    assert!(page_dir.join("page.png").exists());
+
+    let page_json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(page_dir.join("page.json")).unwrap()).unwrap();
+    let latest_json: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(directory.path().join("latest.json")).unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(page_json["page"]["id"], "note-1");
+    assert_eq!(page_json["page"]["title"], "Server sketch");
+    assert_eq!(latest_json["strokes"], page_json["strokes"]);
+    assert_eq!(latest_json["updatedAt"], page_json["updatedAt"]);
+    assert_eq!(latest_json["files"]["svg"], "drawings/latest.svg");
+    assert_eq!(
+        page_json["files"]["svg"],
+        "drawings/pages/note-1/page.svg"
+    );
+}
+
+#[test]
+fn page_ids_that_could_escape_the_drawings_directory_are_refused() {
+    let parent = tempfile::tempdir().unwrap();
+    let drawings_dir = parent.path().join("drawings");
+    std::fs::create_dir_all(&drawings_dir).unwrap();
+    let before: Vec<_> = std::fs::read_dir(parent.path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name())
+        .collect();
+    let server = MobileServer::start_loopback_with_drawings_dir_for_test(&drawings_dir).unwrap();
+
+    for page_id in ["../escape", "a/b", "", "/etc/passwd", &"x".repeat(65)] {
+        let body = snapshot_body(2, &format!(r#""page": {{ "id": "{page_id}" }},"#));
+
+        let response = save_snapshot(&server, &body);
+
+        assert!(
+            response.starts_with("HTTP/1.1 400 Bad Request"),
+            "page id {page_id:?} was not refused"
+        );
+        assert!(
+            response.contains("not usable as a folder name"),
+            "page id {page_id:?} was refused without saying why"
+        );
+    }
+
+    let after: Vec<_> = std::fs::read_dir(parent.path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name())
+        .collect();
+    assert_eq!(before, after, "a refused page id created something");
+    assert!(!drawings_dir.join("latest.json").exists());
+}
+
+#[test]
+fn schema_version_two_without_a_page_is_refused_rather_than_filed_as_legacy() {
+    let directory = tempfile::tempdir().unwrap();
+    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path()).unwrap();
+
+    let response = save_snapshot(&server, &snapshot_body(2, ""));
+
+    assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
+    assert!(response.contains("schemaVersion 2 must carry a page"));
+    assert!(!directory.path().join("latest.json").exists());
+}
+
+#[test]
+fn unknown_schema_versions_are_refused_with_a_reason_the_companion_can_read() {
+    let directory = tempfile::tempdir().unwrap();
+    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path()).unwrap();
+
+    let response = save_snapshot(&server, &snapshot_body(3, ""));
+
+    assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
+    assert!(response.contains("unsupported schemaVersion 3"));
+    assert!(response.contains("understands 1 and 2"));
+    assert!(!directory.path().join("latest.json").exists());
+}
+
+#[test]
+fn capabilities_endpoint_tells_a_companion_which_schema_versions_this_mac_takes() {
+    let server = MobileServer::start_loopback_for_test().unwrap();
+    let base_path = path_from_url(server.url());
+
+    let response = http_request(server.url(), "GET", &format!("{base_path}capabilities"));
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"));
+    assert!(response.contains("application/json"));
+    assert!(response.contains("\"schemaVersions\":[1,2]"));
+    assert!(response.contains("pages"));
+
+    let unknown = http_request(server.url(), "GET", &format!("{base_path}capability"));
+    assert!(unknown.starts_with("HTTP/1.1 404 Not Found"));
+}
+
+#[test]
+fn saving_two_pages_indexes_both_and_points_latest_at_the_newer_one() {
+    let directory = tempfile::tempdir().unwrap();
+    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path()).unwrap();
+
+    save_snapshot(
+        &server,
+        &snapshot_body(2, r#""page": { "id": "page-a", "title": "A" },"#),
+    );
+    save_snapshot(
+        &server,
+        &snapshot_body(2, r#""page": { "id": "page-b", "title": "B" },"#),
+    );
+
+    let index: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(directory.path().join("pages").join("index.json")).unwrap(),
+    )
+    .unwrap();
+    let pages = index["pages"].as_array().unwrap();
+    let ids: Vec<&str> = pages
+        .iter()
+        .map(|page| page["pageId"].as_str().unwrap())
+        .collect();
+
+    assert_eq!(pages.len(), 2);
+    assert!(ids.contains(&"page-a"));
+    assert!(ids.contains(&"page-b"));
+    assert_eq!(pages[0]["strokeCount"], 1);
+
+    let latest: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(directory.path().join("latest.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(latest["page"]["id"], "page-b");
 }
