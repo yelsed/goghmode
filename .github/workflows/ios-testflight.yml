@@ -1,11 +1,14 @@
 name: iOS TestFlight
 
-# Triggers are deliberately limited to manual dispatch and version tags.
-# This repository is public: a pull_request trigger would expose the signing
-# secrets to any fork.
+# This repository is public, so `pull_request` is deliberately absent: it would
+# run on branches from any fork and expose the signing secrets. Pushes to master
+# do not carry that risk, because only someone who can already merge can cause
+# one — a fork's pull request still runs nothing here.
 on:
   workflow_dispatch:
   push:
+    branches:
+      - master
     tags:
       - 'v*'
 
