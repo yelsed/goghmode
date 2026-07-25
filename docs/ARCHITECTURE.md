@@ -254,9 +254,14 @@ single workflow builds and ships the iPad app.
 
 ## Releasing the iPad companion
 
-`.github/workflows/ios-testflight.yml`, triggered by `workflow_dispatch` or a `v*`
-tag only — never `pull_request`, because the repository is public and a fork would
-otherwise get the signing secrets.
+`.github/workflows/ios-testflight.yml`, triggered by a push to `master`,
+`workflow_dispatch`, or a `v*` tag — never `pull_request`, because the repository is
+public and a fork would otherwise get the signing secrets. A push to `master` cannot
+be caused by anyone who could not already merge, so it does not carry that risk.
+
+Every merge therefore ships a build, including a docs-only one. The build number is
+`github.run_number`, which is monotonic per repository and independent of what
+triggered the run, so the extra builds cost numbers rather than correctness.
 
 Step order is itself the design:
 
