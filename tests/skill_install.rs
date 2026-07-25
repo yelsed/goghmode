@@ -28,7 +28,7 @@ fn claude_skill_mentions_spotlight_app_fallback_directory() {
     let contents = std::fs::read_to_string(path).unwrap();
 
     assert!(contents.contains("~/Pictures/GoghMode/drawings/latest.json"));
-    assert!(contents.contains("If the project-local files do not exist"));
+    assert!(contents.contains("GoghMode always writes to the same place"));
 }
 
 #[test]
@@ -42,5 +42,20 @@ fn install_skill_writes_claude_skill_contents() {
     assert!(contents.contains("drawings/latest.json"));
     assert!(contents.contains("drawings/latest.svg"));
     assert!(contents.contains("drawings/latest.png"));
-    assert!(contents.contains("If the project-local files do not exist"));
+    assert!(contents.contains("Use whichever is newer"));
+}
+
+#[test]
+fn claude_skill_picks_the_newest_drawing_rather_than_the_project_local_one() {
+    let temp_home = tempfile::tempdir().unwrap();
+
+    let path = install_skill(SkillTarget::Claude, temp_home.path()).unwrap();
+    let contents = std::fs::read_to_string(path).unwrap();
+
+    assert!(contents.contains("GoghMode always writes to the same place"));
+    assert!(contents.contains("Use whichever is newer"));
+    assert!(
+        !contents.contains("First try the project-local files"),
+        "skill must not tell the agent to prefer project-local files by existence"
+    );
 }

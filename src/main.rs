@@ -79,35 +79,22 @@ fn run() -> anyhow::Result<()> {
     }
 }
 
+/// One location, whatever launched the app. This used to depend on whether the
+/// executable lived inside GoghMode.app, which meant a terminal launch wrote to
+/// `drawings/` relative to the current directory: three shells in three
+/// directories produced three unrelated drawing histories, and the agent reading
+/// `latest.*` had no way to know which one was current.
+///
+/// Pass `--drawings-dir` to put a drawing somewhere else on purpose.
 fn default_drawings_dir() -> PathBuf {
     let Some(home_dir) = home::home_dir() else {
         return PathBuf::from("drawings");
     };
-    let Ok(executable_path) = std::env::current_exe() else {
-        return PathBuf::from("drawings");
-    };
-    default_drawings_dir_for_executable(&executable_path, &home_dir)
+    drawings_dir_in_home(&home_dir)
 }
 
-fn default_drawings_dir_for_executable(
-    executable_path: &std::path::Path,
-    home_dir: &std::path::Path,
-) -> PathBuf {
-    if is_macos_app_bundle_executable(executable_path) {
-        home_dir.join("Pictures").join("GoghMode").join("drawings")
-    } else {
-        PathBuf::from("drawings")
-    }
-}
-
-fn is_macos_app_bundle_executable(executable_path: &std::path::Path) -> bool {
-    let components: Vec<_> = executable_path
-        .components()
-        .map(|component| component.as_os_str())
-        .collect();
-    components.windows(4).any(|window| {
-        window[0] == "GoghMode.app" && window[1] == "Contents" && window[2] == "MacOS"
-    })
+fn drawings_dir_in_home(home_dir: &std::path::Path) -> PathBuf {
+    home_dir.join("Pictures").join("GoghMode").join("drawings")
 }
 
 fn run_app(drawings_dir: PathBuf) -> anyhow::Result<()> {
@@ -154,27 +141,23 @@ mod tests {
     use super::*;
     use std::path::Path;
 
+    /// Terminal and Spotlight launches must land in the same place. When they did
+    /// not, `/goghmode` could read a drawing from a different session entirely.
     #[test]
-    fn default_drawings_dir_uses_project_directory_for_terminal_binary() {
-        let executable = Path::new("/tmp/goghmode/target/release/goghmode");
+    fn drawings_dir_is_the_same_place_however_the_app_was_started() {
         let home = Path::new("/Users/example");
 
         assert_eq!(
-            default_drawings_dir_for_executable(executable, home),
-            PathBuf::from("drawings")
+            drawings_dir_in_home(home),
+            PathBuf::from("/Users/example/Pictures/GoghMode/drawings")
         );
     }
 
     #[test]
-    fn default_drawings_dir_uses_pictures_for_macos_app_bundle() {
-        let executable =
-            Path::new("/Users/example/Applications/GoghMode.app/Contents/MacOS/GoghMode");
+    fn drawings_dir_is_absolute_so_it_cannot_follow_the_working_directory() {
         let home = Path::new("/Users/example");
 
-        assert_eq!(
-            default_drawings_dir_for_executable(executable, home),
-            PathBuf::from("/Users/example/Pictures/GoghMode/drawings")
-        );
+        assert!(drawings_dir_in_home(home).is_absolute());
     }
 
     #[test]
