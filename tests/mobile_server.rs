@@ -143,6 +143,69 @@ fn local_mobile_server_accepts_snapshot_and_writes_latest_files() {
     assert!(saved_json.contains("\"id\": \"mobile-1\""));
 }
 
+fn large_snapshot_body(point_count: usize) -> String {
+    let points = (0..point_count)
+        .map(|index| {
+            let x = (index % 1000) as f32 / 1000.0 * 31.0;
+            let y = (index % 700) as f32 / 700.0 * 23.0;
+            format!("{{\"x\":{x},\"y\":{y},\"pressure\":0.5,\"t\":{index}}}")
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+
+    format!(
+        "{{\"schemaVersion\":1,\"canvas\":{{\"width\":32,\"height\":24,\"background\":\"#ffffff\"}},\
+         \"strokes\":[{{\"id\":\"big-1\",\"color\":\"#111827\",\"width\":4,\"points\":[{points}]}}]}}"
+    )
+}
+
+/// A real upload from the iPad arrives over several TCP segments, unlike every
+/// other test here which writes headers and body in one burst.
+fn http_post_in_chunks(url: &str, path: &str, body: &str) -> String {
+    let (_, rest) = url.split_once("://").unwrap();
+    let authority = rest.split('/').next().unwrap();
+    let mut stream = TcpStream::connect(authority).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+
+    write!(
+        stream,
+        "POST {path} HTTP/1.1\r\nHost: {authority}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+    .unwrap();
+    stream.flush().unwrap();
+
+    for chunk in body.as_bytes().chunks(16 * 1024) {
+        std::thread::sleep(Duration::from_millis(5));
+        stream.write_all(chunk).unwrap();
+        stream.flush().unwrap();
+    }
+
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    response
+}
+
+#[test]
+fn local_mobile_server_accepts_snapshot_split_across_packets() {
+    let directory = tempfile::tempdir().unwrap();
+    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path()).unwrap();
+    let save_path = format!("{}save", path_from_url(server.url()));
+    let body = large_snapshot_body(4000);
+    assert!(body.len() > 64 * 1024, "body should span several reads");
+
+    let response = http_post_in_chunks(server.url(), &save_path, &body);
+
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK"),
+        "large multi-packet upload was rejected: {}",
+        response.lines().next().unwrap_or("<no response>")
+    );
+    assert!(directory.path().join("latest.json").exists());
+}
+
 #[test]
 fn local_mobile_server_rejects_invalid_snapshot_payloads() {
     let directory = tempfile::tempdir().unwrap();

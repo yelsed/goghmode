@@ -133,16 +133,17 @@ fn serve(
 }
 
 fn handle_connection(stream: &mut TcpStream, route_prefix: &str, drawings_dir: &Path) {
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-    let Some(request) = read_http_request(stream) else {
-        write_response(
-            stream,
-            400,
-            "Bad Request",
-            "text/plain; charset=utf-8",
-            b"Bad Request",
-        );
-        return;
+    // Accepted sockets inherit the listener's non-blocking flag on macOS, so
+    // every read past the first returned WouldBlock and any upload spanning more
+    // than one TCP segment was answered with 400.
+    let _ = stream.set_nonblocking(false);
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+    let request = match read_http_request(stream) {
+        Ok(request) => request,
+        Err(reason) => {
+            reject(stream, reason);
+            return;
+        }
     };
 
     let path = request
@@ -204,54 +205,67 @@ struct HttpRequest {
     body: Vec<u8>,
 }
 
-fn read_http_request(stream: &mut TcpStream) -> Option<HttpRequest> {
-    let mut bytes = Vec::with_capacity(8192);
+/// Reads until `want` more bytes are buffered, tolerating the interruptions a
+/// real socket produces. Returns the reason a request could not be read so the
+/// client is told what went wrong instead of a bare 400.
+fn read_more(stream: &mut TcpStream, bytes: &mut Vec<u8>) -> Result<usize, &'static str> {
     let mut chunk = [0_u8; 8192];
+    loop {
+        return match stream.read(&mut chunk) {
+            Ok(0) => Err("connection closed before the request finished"),
+            Ok(bytes_read) => {
+                bytes.extend_from_slice(&chunk[..bytes_read]);
+                Ok(bytes_read)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                Err("timed out waiting for the rest of the request")
+            }
+            Err(_) => Err("could not read the request"),
+        };
+    }
+}
+
+fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, &'static str> {
+    let mut bytes = Vec::with_capacity(8192);
     let header_end = loop {
-        let bytes_read = stream.read(&mut chunk).ok()?;
-        if bytes_read == 0 {
-            return None;
-        }
-        bytes.extend_from_slice(&chunk[..bytes_read]);
-        if bytes.len() > MAX_SAVE_BODY_BYTES {
-            return None;
-        }
         if let Some(header_end) = find_header_end(&bytes) {
             break header_end;
         }
+        if bytes.len() > MAX_SAVE_BODY_BYTES {
+            return Err("request headers too large");
+        }
+        read_more(stream, &mut bytes)?;
     };
 
     let header_text = String::from_utf8_lossy(&bytes[..header_end]);
     let mut lines = header_text.lines();
-    let request_line = lines.next()?;
+    let request_line = lines.next().ok_or("empty request")?;
     let mut request_parts = request_line.split_whitespace();
-    let method = request_parts.next()?.to_owned();
-    let raw_path = request_parts.next()?.to_owned();
+    let method = request_parts.next().ok_or("malformed request line")?.to_owned();
+    let raw_path = request_parts.next().ok_or("malformed request line")?.to_owned();
     let content_length = lines
         .filter_map(|line| line.split_once(':'))
         .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
         .and_then(|(_, value)| value.trim().parse::<usize>().ok())
         .unwrap_or(0);
     if content_length > MAX_SAVE_BODY_BYTES {
-        return None;
+        return Err("drawing is too large to upload");
     }
 
     let body_start = header_end + 4;
-    let expected_len = body_start.checked_add(content_length)?;
+    let expected_len = body_start
+        .checked_add(content_length)
+        .ok_or("declared body length is not usable")?;
     while bytes.len() < expected_len {
-        let bytes_read = stream.read(&mut chunk).ok()?;
-        if bytes_read == 0 {
-            return None;
-        }
-        bytes.extend_from_slice(&chunk[..bytes_read]);
-        if bytes.len() > expected_len || bytes.len() > MAX_SAVE_BODY_BYTES + body_start {
-            return None;
-        }
+        read_more(stream, &mut bytes)?;
     }
 
-    Some(HttpRequest {
+    Ok(HttpRequest {
         method,
         raw_path,
+        // A client may send more than Content-Length; take only what was declared
+        // rather than treating the extra as a malformed request.
         body: bytes[body_start..expected_len].to_vec(),
     })
 }
@@ -261,24 +275,15 @@ fn find_header_end(bytes: &[u8]) -> Option<usize> {
 }
 
 fn handle_save_request(stream: &mut TcpStream, drawings_dir: &Path, body: &[u8]) {
-    let Ok(snapshot) = serde_json::from_slice::<DrawingSnapshot>(body) else {
-        write_response(
-            stream,
-            400,
-            "Bad Request",
-            "text/plain; charset=utf-8",
-            b"Bad Request",
-        );
-        return;
+    let snapshot = match serde_json::from_slice::<DrawingSnapshot>(body) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            reject_owned(stream, format!("could not parse the drawing: {error}"));
+            return;
+        }
     };
-    if !is_valid_snapshot(&snapshot) {
-        write_response(
-            stream,
-            400,
-            "Bad Request",
-            "text/plain; charset=utf-8",
-            b"Bad Request",
-        );
+    if let Err(reason) = validate_snapshot(&snapshot) {
+        reject_owned(stream, reason);
         return;
     }
 
@@ -300,46 +305,84 @@ fn handle_save_request(stream: &mut TcpStream, drawings_dir: &Path, body: &[u8])
     }
 }
 
-fn is_valid_snapshot(snapshot: &DrawingSnapshot) -> bool {
-    if snapshot.schema_version != 1
-        || !valid_canvas_extent(snapshot.canvas.width)
-        || !valid_canvas_extent(snapshot.canvas.height)
-        || snapshot.canvas.background.len() > 64
-        || snapshot.strokes.len() > 4096
-    {
-        return false;
+/// Names the first thing wrong with a snapshot. A bare "invalid" is impossible to
+/// act on when the drawing has thousands of points.
+fn validate_snapshot(snapshot: &DrawingSnapshot) -> Result<(), String> {
+    if snapshot.schema_version != 1 {
+        return Err(format!(
+            "unsupported schemaVersion {} (this Mac understands 1)",
+            snapshot.schema_version
+        ));
+    }
+    if !valid_canvas_extent(snapshot.canvas.width) || !valid_canvas_extent(snapshot.canvas.height) {
+        return Err(format!(
+            "canvas {}x{} is outside the supported 1-4096 range",
+            snapshot.canvas.width, snapshot.canvas.height
+        ));
+    }
+    if snapshot.canvas.background.len() > 64 {
+        return Err("canvas background colour is too long".to_owned());
+    }
+    if snapshot.strokes.len() > 4096 {
+        return Err(format!(
+            "{} strokes exceeds the 4096 limit",
+            snapshot.strokes.len()
+        ));
     }
 
     let mut point_count = 0_usize;
     for stroke in &snapshot.strokes {
-        if stroke.id.len() > 128
-            || stroke.color.len() > 64
-            || !stroke.width.is_finite()
-            || !(0.5..=80.0).contains(&stroke.width)
-        {
-            return false;
+        if stroke.id.len() > 128 {
+            return Err(format!("stroke id is too long: {} chars", stroke.id.len()));
+        }
+        if stroke.color.len() > 64 {
+            return Err(format!("stroke {} has an over-long colour", stroke.id));
+        }
+        if !stroke.width.is_finite() || !(0.5..=80.0).contains(&stroke.width) {
+            return Err(format!(
+                "stroke {} width {} is outside 0.5-80",
+                stroke.id, stroke.width
+            ));
         }
 
         point_count = point_count.saturating_add(stroke.points.len());
         if point_count > 200_000 {
-            return false;
+            return Err("drawing has more than 200000 points".to_owned());
         }
 
         for point in &stroke.points {
-            if !point.x.is_finite()
-                || !point.y.is_finite()
-                || !point.pressure.is_finite()
-                || point.x < 0.0
+            if !point.x.is_finite() || !point.y.is_finite() || !point.pressure.is_finite() {
+                return Err(format!("stroke {} contains a non-finite value", stroke.id));
+            }
+            if point.x < 0.0
                 || point.y < 0.0
                 || point.x > snapshot.canvas.width
                 || point.y > snapshot.canvas.height
             {
-                return false;
+                return Err(format!(
+                    "stroke {} has a point at ({}, {}) outside the {}x{} canvas",
+                    stroke.id, point.x, point.y, snapshot.canvas.width, snapshot.canvas.height
+                ));
             }
         }
     }
 
-    true
+    Ok(())
+}
+
+fn reject(stream: &mut TcpStream, reason: &str) {
+    reject_owned(stream, reason.to_owned());
+}
+
+fn reject_owned(stream: &mut TcpStream, reason: String) {
+    eprintln!("goghmode: rejected upload: {reason}");
+    write_response(
+        stream,
+        400,
+        "Bad Request",
+        "text/plain; charset=utf-8",
+        reason.as_bytes(),
+    );
 }
 
 fn valid_canvas_extent(value: f32) -> bool {
