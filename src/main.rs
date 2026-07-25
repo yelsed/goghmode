@@ -111,12 +111,7 @@ fn is_macos_app_bundle_executable(executable_path: &std::path::Path) -> bool {
 }
 
 fn run_app(drawings_dir: PathBuf) -> anyhow::Result<()> {
-    let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1100.0, 760.0])
-            .with_min_inner_size([720.0, 480.0]),
-        ..Default::default()
-    };
+    let native_options = native_options();
 
     eframe::run_native(
         "GoghMode",
@@ -125,6 +120,16 @@ fn run_app(drawings_dir: PathBuf) -> anyhow::Result<()> {
     )
     .map_err(|error| anyhow::anyhow!("{error}"))?;
     Ok(())
+}
+
+fn native_options() -> eframe::NativeOptions {
+    eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1100.0, 760.0])
+            .with_min_inner_size([720.0, 480.0]),
+        run_and_return: false,
+        ..Default::default()
+    }
 }
 
 impl From<PromptTargetArg> for PromptTarget {
@@ -170,5 +175,12 @@ mod tests {
             default_drawings_dir_for_executable(executable, home),
             PathBuf::from("/Users/example/Pictures/GoghMode/drawings")
         );
+    }
+
+    #[test]
+    fn native_app_uses_non_returning_event_loop() {
+        let options = native_options();
+
+        assert!(!options.run_and_return);
     }
 }

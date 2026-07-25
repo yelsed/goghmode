@@ -235,7 +235,7 @@ The profile name must match `ipad-companion/ExportOptions.plist` and the workflo
     -nodes \
     -keyout "$HOME/goghmode-distribution.key" \
     -out "$HOME/goghmode-distribution.certSigningRequest" \
-    -subj "/emailAddress=langeveld@fivespark.com/CN=Desley Langeveld/C=NL"
+    -subj "/emailAddress=desley.langeveld@hotmail.com/CN=Desley Langeveld/C=NL"
   ```
 
 - [ ] At https://developer.apple.com/account/resources/certificates/list create an

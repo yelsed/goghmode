@@ -2,6 +2,7 @@ import PencilKit
 import SwiftUI
 
 struct ContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage("goghModeEndpoint") private var endpointText = ""
     @StateObject private var uploader = UploadController()
     @State private var drawing = PKDrawing()
@@ -21,6 +22,13 @@ struct ContentView: View {
                 setupView
             } else {
                 drawingView
+            }
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            // Coming back to the app is the moment the Mac is most likely to
+            // have been reopened, so it is the natural time to re-check.
+            if newPhase == .active {
+                uploader.retryIfOffline()
             }
         }
     }
@@ -116,22 +124,28 @@ struct ContentView: View {
     }
 
     private var statusBadge: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(statusColor)
-                .frame(width: 10, height: 10)
-            Text(uploader.status.label)
-                .font(.subheadline.weight(.semibold))
-            if case .failed(let message) = uploader.status {
-                Text(message)
-                    .font(.caption)
-                    .lineLimit(1)
-                    .foregroundStyle(.secondary)
+        Button {
+            uploader.retry()
+        } label: {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: 10, height: 10)
+                Text(uploader.status.label)
+                    .font(.subheadline.weight(.semibold))
+                if case .failed(let message) = uploader.status {
+                    Text(message)
+                        .font(.caption)
+                        .lineLimit(1)
+                        .foregroundStyle(.secondary)
+                }
             }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(.thinMaterial, in: Capsule())
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(.thinMaterial, in: Capsule())
+        .buttonStyle(.plain)
+        .disabled(!uploader.canRetry)
     }
 
     private var statusColor: Color {

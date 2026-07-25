@@ -16,19 +16,34 @@ struct PencilCanvasView: UIViewRepresentable {
         canvasView.delegate = context.coordinator
         canvasView.backgroundColor = .white
         canvasView.drawing = drawing
-        canvasView.drawingPolicy = .anyInput
-        canvasView.tool = PKInkingTool(.pen, color: .black, width: 4)
+        // `.default` respects the system pencil-only preference while the tool
+        // picker is visible, so palm and finger taps stop leaving stray dots.
+        // The picker exposes a toggle for people drawing without a Pencil.
+        canvasView.drawingPolicy = .default
         canvasView.alwaysBounceHorizontal = false
         canvasView.alwaysBounceVertical = false
         canvasView.minimumZoomScale = 1
         canvasView.maximumZoomScale = 1
         canvasView.contentInsetAdjustmentBehavior = .never
+
+        // PKCanvasView conforms to PKToolPickerObserver, so observing the picker
+        // is all it takes for pen, eraser, lasso, colors and widths to work.
+        let toolPicker = context.coordinator.toolPicker
+        toolPicker.addObserver(canvasView)
+        toolPicker.setVisible(true, forFirstResponder: canvasView)
+
         context.coordinator.lastClearSignal = clearSignal
         return canvasView
     }
 
     func updateUIView(_ canvasView: PKCanvasView, context: Context) {
         context.coordinator.parent = self
+
+        // The picker only appears for the first responder, and a view cannot
+        // become one until it is in a window.
+        if canvasView.window != nil && !canvasView.isFirstResponder {
+            canvasView.becomeFirstResponder()
+        }
 
         if context.coordinator.lastClearSignal != clearSignal {
             context.coordinator.lastClearSignal = clearSignal
@@ -42,6 +57,13 @@ struct PencilCanvasView: UIViewRepresentable {
     final class Coordinator: NSObject, PKCanvasViewDelegate {
         var parent: PencilCanvasView
         var lastClearSignal = 0
+
+        // Held here on purpose: a released PKToolPicker takes the palette with it.
+        let toolPicker: PKToolPicker = {
+            let picker = PKToolPicker()
+            picker.stateAutosaveName = "goghModeToolPicker"
+            return picker
+        }()
 
         init(parent: PencilCanvasView) {
             self.parent = parent

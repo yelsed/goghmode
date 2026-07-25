@@ -30,12 +30,22 @@ final class UploadController: ObservableObject {
 
     private let client: GoghModeClient
     private var pendingUpload: Task<Void, Never>?
+    private var lastSnapshot: DrawingSnapshot?
+    private var lastEndpointText = ""
+
+    var canRetry: Bool {
+        if case .failed = status {
+            return lastSnapshot != nil
+        }
+        return false
+    }
 
     init(client: GoghModeClient = GoghModeClient()) {
         self.client = client
     }
 
     func schedule(snapshot: DrawingSnapshot, endpointText: String) {
+        remember(snapshot, endpointText)
         pendingUpload?.cancel()
         status = .waiting
 
@@ -47,20 +57,39 @@ final class UploadController: ObservableObject {
             } catch is CancellationError {
                 return
             } catch {
-                status = .failed(error.localizedDescription)
+                status = .failed(guidance(for: error))
             }
         }
     }
 
     func uploadNow(snapshot: DrawingSnapshot, endpointText: String) {
+        remember(snapshot, endpointText)
         pendingUpload?.cancel()
         pendingUpload = Task { [client] in
             do {
                 try await upload(snapshot, endpointText: endpointText, client: client)
             } catch {
-                status = .failed(error.localizedDescription)
+                status = .failed(guidance(for: error))
             }
         }
+    }
+
+    /// Re-sends the last drawing. Without this the status stays `Offline` forever
+    /// once an upload fails, because nothing retries until the drawing changes —
+    /// so quitting and reopening the Mac app looked like a permanent failure.
+    func retry() {
+        guard let snapshot = lastSnapshot else { return }
+        uploadNow(snapshot: snapshot, endpointText: lastEndpointText)
+    }
+
+    func retryIfOffline() {
+        guard canRetry else { return }
+        retry()
+    }
+
+    private func remember(_ snapshot: DrawingSnapshot, _ endpointText: String) {
+        lastSnapshot = snapshot
+        lastEndpointText = endpointText
     }
 
     private func upload(_ snapshot: DrawingSnapshot, endpointText: String, client: GoghModeClient) async throws {
@@ -69,7 +98,49 @@ final class UploadController: ObservableObject {
         }
 
         status = .saving
-        try await client.upload(snapshot, to: endpoint)
+        do {
+            try await client.upload(snapshot, to: endpoint)
+        } catch let error as URLError where error.isWorthRetrying {
+            // URLSession can hand back a pooled socket the Mac already closed,
+            // which surfaces as `networkConnectionLost` even though the Mac is
+            // reachable. One retry separates a dead socket from a dead server.
+            try await Task.sleep(for: .milliseconds(300))
+            try await client.upload(snapshot, to: endpoint)
+        }
         status = .saved(Date())
+    }
+
+    private func guidance(for error: Error) -> String {
+        if let uploadError = error as? UploadError {
+            return uploadError.errorDescription ?? "Upload failed."
+        }
+
+        guard let urlError = error as? URLError else {
+            return error.localizedDescription
+        }
+
+        return switch urlError.code {
+        case .networkConnectionLost, .cannotConnectToHost, .timedOut:
+            "Mac not answering. Open GoghMode on the Mac, then tap to retry."
+        case .notConnectedToInternet:
+            "No network. Join the same Wi-Fi as the Mac."
+        case .cannotFindHost, .dnsLookupFailed:
+            "Address not found. Copy the mobile URL from the Mac again."
+        default:
+            urlError.localizedDescription
+        }
+    }
+}
+
+private extension URLError {
+    /// Failures that a second attempt can plausibly clear, as opposed to a wrong
+    /// address or a Mac that is genuinely not running the app.
+    var isWorthRetrying: Bool {
+        switch code {
+        case .networkConnectionLost, .timedOut, .cannotConnectToHost:
+            true
+        default:
+            false
+        }
     }
 }
