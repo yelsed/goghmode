@@ -1,7 +1,54 @@
+import PencilKit
 import XCTest
 @testable import GoghModeCompanion
 
 final class DrawingSnapshotTests: XCTestCase {
+    private func drawing(at locations: [CGPoint]) -> PKDrawing {
+        let points = locations.map { location in
+            PKStrokePoint(
+                location: location,
+                timeOffset: 0,
+                size: CGSize(width: 4, height: 4),
+                opacity: 1,
+                force: 0.5,
+                azimuth: 0,
+                altitude: 0
+            )
+        }
+        let path = PKStrokePath(controlPoints: points, creationDate: Date(timeIntervalSince1970: 0))
+        return PKDrawing(strokes: [PKStroke(ink: PKInk(.pen, color: .black), path: path)])
+    }
+
+    func testPencilPointsAreRoundedToKeepUploadsSmall() throws {
+        let canvas = CGSize(width: 320, height: 240)
+        let snapshot = DrawingSnapshot.fromPencilDrawing(
+            drawing(at: [CGPoint(x: 10.123456789, y: 20.987654321)]),
+            canvasSize: canvas
+        )
+
+        let point = try XCTUnwrap(snapshot.strokes.first?.points.first)
+        XCTAssertEqual(point.x, 10.12, accuracy: 0.0001)
+        XCTAssertEqual(point.y, 20.99, accuracy: 0.0001)
+    }
+
+    /// Rounding runs before clamping precisely so a value at the edge cannot be
+    /// rounded up past the canvas, which the Mac rejects with a 400.
+    func testRoundingNeverPushesPointsOutsideTheCanvas() throws {
+        let canvas = CGSize(width: 320, height: 240)
+        let snapshot = DrawingSnapshot.fromPencilDrawing(
+            drawing(at: [CGPoint(x: 319.999, y: 239.999), CGPoint(x: -5, y: -5)]),
+            canvasSize: canvas
+        )
+
+        let points = try XCTUnwrap(snapshot.strokes.first?.points)
+        for point in points {
+            XCTAssertGreaterThanOrEqual(point.x, 0)
+            XCTAssertGreaterThanOrEqual(point.y, 0)
+            XCTAssertLessThanOrEqual(point.x, snapshot.canvas.width)
+            XCTAssertLessThanOrEqual(point.y, snapshot.canvas.height)
+        }
+    }
+
     func testSnapshotEncodingMatchesRustSchema() throws {
         let snapshot = DrawingSnapshot(
             schemaVersion: 1,

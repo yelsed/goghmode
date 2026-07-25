@@ -76,7 +76,25 @@ it is no longer the primary drawing surface. Options worth weighing:
 Leaning toward the second. Decide once multi-page exists, since a page browser is the main thing
 that would make the Mac window worth opening.
 
-## 3. Pairing without copy-paste
+## 3. Uploads resend the whole drawing
+
+The iPad posts the entire drawing 600 ms after every stroke. Rounding coordinates cut the payload
+substantially, but the cost still grows with page length: a long page re-uploads every stroke ever
+drawn, every few seconds.
+
+This did not matter while pages were short. It will matter as soon as multi-page notebooks exist,
+since a page is meant to be written on for a long time.
+
+Options, cheapest first:
+
+- Skip the upload when the drawing has not changed since the last successful one.
+- Send only strokes added since the last acknowledged upload, with the Mac appending. Needs the Mac
+  to track per-session state it currently does not have.
+- Keep full snapshots but only on an explicit save, with autosave doing deltas.
+
+Not urgent while pages stay short. Revisit with item 1.
+
+## 4. Pairing without copy-paste
 
 Not raised as feedback, but surfaced while fixing the connection bug and worth recording.
 

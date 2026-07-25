@@ -27,3 +27,6 @@ xcuserdata/
 *.mobileprovision
 *.certSigningRequest
 *.cer
+
+# OMC runtime state
+.omc/

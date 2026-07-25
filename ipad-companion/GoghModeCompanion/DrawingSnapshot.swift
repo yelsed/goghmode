@@ -47,10 +47,14 @@ extension DrawingSnapshot {
         let height = max(1.0, canvasSize.height)
         let strokes = drawing.strokes.enumerated().compactMap { strokeIndex, pencilStroke -> Stroke? in
             let points = pencilStroke.path.enumerated().map { pointIndex, strokePoint in
+                // Full Double precision costs ~250 bytes per point on the wire and
+                // the Mac stores f32 regardless, so the extra digits are discarded
+                // after inflating every upload. Rounding happens before clamping so
+                // a rounded-up value can never land outside the canvas.
                 Point(
-                    x: Double(strokePoint.location.x.clamped(to: 0...width)),
-                    y: Double(strokePoint.location.y.clamped(to: 0...height)),
-                    pressure: Double(strokePoint.force.clamped(to: 0...1)),
+                    x: roundedToHundredths(strokePoint.location.x).clamped(to: 0...Double(width)),
+                    y: roundedToHundredths(strokePoint.location.y).clamped(to: 0...Double(height)),
+                    pressure: roundedToThousandths(strokePoint.force).clamped(to: 0...1),
                     t: UInt64(max(0, strokePoint.timeOffset * 1000)) + UInt64(pointIndex)
                 )
             }
@@ -71,6 +75,17 @@ extension DrawingSnapshot {
             strokes: strokes
         )
     }
+}
+
+/// Sub-pixel on a canvas about a thousand points wide, so nothing visible is lost.
+private func roundedToHundredths(_ value: CGFloat) -> Double {
+    guard value.isFinite else { return 0 }
+    return (Double(value) * 100).rounded() / 100
+}
+
+private func roundedToThousandths(_ value: CGFloat) -> Double {
+    guard value.isFinite else { return 0 }
+    return (Double(value) * 1000).rounded() / 1000
 }
 
 private func averagePointWidth(in path: PKStrokePath) -> CGFloat {
