@@ -61,15 +61,7 @@ goghmode
 
 or open **GoghMode** from Spotlight, Raycast, or `~/Applications/GoghMode.app`.
 
-When opened from the terminal, drawings are saved in the current directory:
-
-```text
-drawings/latest.png
-drawings/latest.svg
-drawings/latest.json
-```
-
-When opened from Spotlight or Raycast, drawings are saved here:
+However it is opened, drawings are always saved in the same place:
 
 ```text
 ~/Pictures/GoghMode/drawings/latest.png
@@ -77,7 +69,16 @@ When opened from Spotlight or Raycast, drawings are saved here:
 ~/Pictures/GoghMode/drawings/latest.json
 ```
 
-The Claude Code skill checks both locations.
+To save somewhere else, pass the directory explicitly:
+
+```bash
+goghmode --drawings-dir ./drawings
+```
+
+Earlier versions saved to `drawings/` relative to the terminal's working directory, so a terminal
+launch and a Spotlight launch wrote to different places, and each terminal directory kept its own
+separate history. If a stale `drawings/` directory is still lying around from that, it is safe to
+delete.
 
 ## Desktop controls
 

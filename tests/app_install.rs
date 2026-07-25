@@ -50,7 +50,12 @@ fn app_bundle_launcher_starts_binary_outside_launchservices_app_context() {
         .exists());
     assert!(launcher_text.contains("Application Support/GoghMode"));
     assert!(launcher_text.contains("goghmode-bin"));
-    assert!(launcher_text.contains("--drawings-dir"));
+    // The launcher must not name a drawings directory. The binary's own default
+    // is the single source of truth, so a Spotlight launch and a terminal launch
+    // cannot drift apart.
+    assert!(!launcher_text.contains("--drawings-dir"));
+    // env -i wipes the environment, so HOME has to survive for the default to resolve.
+    assert!(launcher_text.contains("HOME=\"$HOME\""));
     assert!(launcher_text.contains("&"));
     assert!(launcher_text.contains("env -i"));
     assert!(launcher_text.contains("nohup"));

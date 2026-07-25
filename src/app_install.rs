@@ -61,7 +61,7 @@ fn launcher_script() -> &'static str {
 SUPPORT="$HOME/Library/Application Support/GoghMode"
 LOG_DIR="$HOME/Library/Logs"
 mkdir -p "$LOG_DIR"
-nohup /usr/bin/env -i HOME="$HOME" PATH="/usr/bin:/bin:/usr/sbin:/sbin" "$SUPPORT/goghmode-bin" --drawings-dir "$HOME/Pictures/GoghMode/drawings" >> "$LOG_DIR/GoghMode.log" 2>&1 &
+nohup /usr/bin/env -i HOME="$HOME" PATH="/usr/bin:/bin:/usr/sbin:/sbin" "$SUPPORT/goghmode-bin" >> "$LOG_DIR/GoghMode.log" 2>&1 &
 "#
 }
 
