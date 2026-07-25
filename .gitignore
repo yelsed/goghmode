@@ -15,3 +15,15 @@
 # Local logs and temporary files
 *.log
 *.tmp
+
+# Xcode build output
+/ipad-companion/build/
+*.xcarchive
+xcuserdata/
+
+# Signing material — never commit these
+*.p12
+*.p8
+*.mobileprovision
+*.certSigningRequest
+*.cer

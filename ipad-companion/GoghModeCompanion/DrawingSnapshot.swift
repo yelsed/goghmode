@@ -1,0 +1,116 @@
+import CoreGraphics
+import Foundation
+import PencilKit
+import UIKit
+
+struct DrawingSnapshot: Codable, Equatable {
+    let schemaVersion: Int
+    let canvas: CanvasSize
+    let strokes: [Stroke]
+}
+
+struct CanvasSize: Codable, Equatable {
+    let width: Double
+    let height: Double
+    let background: String
+}
+
+struct Stroke: Codable, Equatable, Identifiable {
+    let id: String
+    let color: String
+    let width: Double
+    let points: [Point]
+}
+
+struct Point: Codable, Equatable {
+    let x: Double
+    let y: Double
+    let pressure: Double
+    let t: UInt64
+}
+
+extension DrawingSnapshot {
+    static func empty(canvasSize: CGSize) -> DrawingSnapshot {
+        DrawingSnapshot(
+            schemaVersion: 1,
+            canvas: CanvasSize(
+                width: Double(max(1.0, canvasSize.width)),
+                height: Double(max(1.0, canvasSize.height)),
+                background: "#ffffff"
+            ),
+            strokes: []
+        )
+    }
+
+    static func fromPencilDrawing(_ drawing: PKDrawing, canvasSize: CGSize) -> DrawingSnapshot {
+        let width = max(1.0, canvasSize.width)
+        let height = max(1.0, canvasSize.height)
+        let strokes = drawing.strokes.enumerated().compactMap { strokeIndex, pencilStroke -> Stroke? in
+            let points = pencilStroke.path.enumerated().map { pointIndex, strokePoint in
+                Point(
+                    x: Double(strokePoint.location.x.clamped(to: 0...width)),
+                    y: Double(strokePoint.location.y.clamped(to: 0...height)),
+                    pressure: Double(strokePoint.force.clamped(to: 0...1)),
+                    t: UInt64(max(0, strokePoint.timeOffset * 1000)) + UInt64(pointIndex)
+                )
+            }
+
+            guard !points.isEmpty else { return nil }
+
+            return Stroke(
+                id: "stroke-\(strokeIndex + 1)",
+                color: pencilStroke.ink.color.hexRGB,
+                width: Double(averagePointWidth(in: pencilStroke.path).clamped(to: 1...80)),
+                points: points
+            )
+        }
+
+        return DrawingSnapshot(
+            schemaVersion: 1,
+            canvas: CanvasSize(width: Double(width), height: Double(height), background: "#ffffff"),
+            strokes: strokes
+        )
+    }
+}
+
+private func averagePointWidth(in path: PKStrokePath) -> CGFloat {
+    var total: CGFloat = 0
+    var count: CGFloat = 0
+
+    for point in path {
+        total += max(point.size.width, point.size.height)
+        count += 1
+    }
+
+    if count == 0 {
+        return 4
+    }
+
+    return total / count
+}
+
+private extension Comparable {
+    func clamped(to range: ClosedRange<Self>) -> Self {
+        min(max(self, range.lowerBound), range.upperBound)
+    }
+}
+
+private extension UIColor {
+    var hexRGB: String {
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+
+        guard getRed(&red, green: &green, blue: &blue, alpha: &alpha) else {
+            return "#111827"
+        }
+
+        return String(
+            format: "#%02X%02X%02X",
+            Int((red * 255).rounded()),
+            Int((green * 255).rounded()),
+            Int((blue * 255).rounded())
+        )
+    }
+}
