@@ -21,7 +21,8 @@ this way?", write the ADR.
 | [0003](0003-vector-strokes-over-png-upload.md) | Clients upload vector strokes, not rendered images | Accepted |
 | [0004](0004-no-http-framework.md) | Hand-written HTTP instead of a framework | Accepted |
 | [0005](0005-native-swiftui-over-flutter.md) | Native SwiftUI and PencilKit for the iPad companion | Accepted |
+| [0006](0006-paired-devices-over-shared-url-token.md) | Paired devices with per-device secrets, not one shared URL token | Proposed |
 
-These five were written up on 25 July 2026 from the code and the background
+The first five were written up on 25 July 2026 from the code and the background
 documents. The date on each record is when the decision was *made*, not when it was
 written down.

@@ -23,6 +23,8 @@ the current map** — where the two disagree, the map wins.
 | [pencilkit-deployment-todo.md](pencilkit-deployment-todo.md) | The Apple signing log. The TestFlight half is a live runbook; the cable-install half is superseded. |
 | [superpowers/plans/](superpowers/plans/) | The executed implementation plan for the iPad companion. Historical — the code diverged from it deliberately in two places. |
 | [`later.md`](../later.md) (repository root) | The deferred-work register from the first round of iPad feedback. Feeds [PLANNING.md](PLANNING.md) directly. |
+| [companion-multi-host-planning-prompt.md](companion-multi-host-planning-prompt.md) | The brief for the multi-host work: requirements, security constraints, and the analysis it asked for. |
+| [companion-multi-host-plan.md](companion-multi-host-plan.md) | The answer to that brief. Threat model, design comparison, pairing protocol, cross-platform split, Omarchy deployment, migration, and ordered phases. Decision recorded as [ADR-0006](decisions/0006-paired-devices-over-shared-url-token.md). |
 
 ## How these relate
 - **OVERVIEW** = the "what & why", readable. It *summarizes and links* — it never re-explains the specs.

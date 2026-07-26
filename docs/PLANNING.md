@@ -53,8 +53,12 @@ Independent of Phase 1; can be done at any time.
 - [ ] Handle the ephemeral-port fallback: at minimum warn when the server did not
       get 8787, since a stale URL currently fails silently. See **Known failure
       modes** in [ARCHITECTURE.md](ARCHITECTURE.md).
-- [ ] Decide whether the secret URL alone stays sufficient or the Mac should
-      confirm a new device — see [ADR-0002](decisions/0002-token-in-path-lan-pairing.md).
+- [x] Decide whether the secret URL alone stays sufficient or the host should
+      confirm a new device. **It is not sufficient once there is more than one
+      host.** The host confirms each device and issues it a secret of its own —
+      [ADR-0006](decisions/0006-paired-devices-over-shared-url-token.md),
+      superseding [ADR-0002](decisions/0002-token-in-path-lan-pairing.md) for the
+      native companion only.
 
 ### Phase 3 — What the Mac app becomes
 Gated on Phase 1. The feedback was "the Mac app feels a bit redundant", but the Mac
@@ -77,6 +81,23 @@ cut the payload a lot, but cost still grows with page length. Cheapest first:
 - [ ] Send only strokes added since the last acknowledged upload, with the Mac
       appending — needs per-session state the Mac does not keep today.
 - [ ] Full snapshots on explicit save only, deltas on autosave.
+
+### Phase 5 — Several hosts, and a Linux host
+Independent of Phases 1, 3 and 4; absorbs the pairing work in Phase 2. Planned in
+full in [companion-multi-host-plan.md](companion-multi-host-plan.md), which carries
+the threat model, the protocol, and the ordered sub-phases.
+
+- [ ] Linux host on Arch/Omarchy, and host-neutral wording everywhere (`xdg-open`,
+      a desktop entry instead of an application bundle, no user-visible "Mac").
+- [ ] A stable host identity that is not the host's address, plus a device registry
+      that can be revoked one device at a time.
+- [ ] Pairing: a single-use code shown as a QR, approved by a person on the host.
+- [ ] Signed uploads with replay protection, and a signed response so the companion
+      can tell it reached the host it paired with.
+- [ ] Several saved hosts in the companion, with the destination always visible and
+      chosen explicitly.
+- [ ] Sending one page to several named hosts — optional, and deliberately the last
+      thing decided.
 
 ### Later / unscheduled
 - [ ] Photo and snapshot import, so a phone photo of a paper page enters the same
