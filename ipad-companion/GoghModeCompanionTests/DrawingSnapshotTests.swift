@@ -242,6 +242,73 @@ final class DrawingSnapshotTests: XCTestCase {
         XCTAssertEqual(endpoint.promoteURL.absoluteString, "http://192.168.1.10:8787/abc123/promote")
     }
 
+    /// Why register previews came out blank: the source rect was pinned to a portrait
+    /// canvas, so anything drawn on an iPad held in landscape fell outside it and was
+    /// cropped away. Rendered under a dark trait too, since previews sit on paper
+    /// that stays light in both appearances.
+    func testPreviewShowsInkDrawnPastThePortraitCanvas() throws {
+        let landscape = drawing(at: [
+            CGPoint(x: 1180, y: 400),
+            CGPoint(x: 1220, y: 430),
+            CGPoint(x: 1260, y: 460),
+            CGPoint(x: 1300, y: 490),
+        ])
+
+        var rendered: UIImage?
+        UITraitCollection(userInterfaceStyle: .dark).performAsCurrent {
+            rendered = SheetPreview.render(landscape)
+        }
+
+        XCTAssertTrue(carriesInk(try XCTUnwrap(rendered)))
+    }
+
+    /// The defect itself, kept as a witness: the same drawing rendered the old way —
+    /// against a portrait-only source rect — produces a blank image. Without this the
+    /// test above could pass for the wrong reason and the fix could be removed
+    /// unnoticed.
+    func testTheOldPortraitOnlySourceRectProducedABlankImage() throws {
+        let landscape = drawing(at: [CGPoint(x: 1180, y: 400), CGPoint(x: 1300, y: 490)])
+        let portraitOnly = landscape.image(
+            from: CGRect(x: 0, y: 0, width: 1024, height: 1366),
+            scale: 0.2
+        )
+
+        XCTAssertFalse(carriesInk(portraitOnly))
+    }
+
+    func testPreviewOfAnUntouchedSheetRendersEmptyPaper() throws {
+        let image = SheetPreview.render(PKDrawing())
+
+        XCTAssertGreaterThan(image.size.width, 0)
+        XCTAssertFalse(carriesInk(image))
+    }
+
+    /// Dark, opaque pixels mean ink landed. Transparent or pale ones mean the
+    /// preview came out blank, which is the defect this guards.
+    private func carriesInk(_ image: UIImage) -> Bool {
+        guard let cgImage = image.cgImage else { return false }
+        let width = cgImage.width
+        let height = cgImage.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+
+        guard let context = CGContext(
+            data: &pixels,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return false
+        }
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        return stride(from: 0, to: pixels.count, by: 4).contains { index in
+            pixels[index + 3] > 40 && pixels[index] < 140
+        }
+    }
+
     @MainActor
     private func temporaryStoreURL() -> URL {
         FileManager.default.temporaryDirectory

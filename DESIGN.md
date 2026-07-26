@@ -52,10 +52,10 @@ spacing:
   gutter: "20px"
   margin: "28px"
 components:
-  sheet-card:
+  register-line:
     backgroundColor: "{colors.sheet}"
     textColor: "{colors.ink}"
-    rounded: "{rounded.sheet}"
+    padding: "8px 13px"
   title-block:
     backgroundColor: "{colors.sheet}"
     textColor: "{colors.ink}"
@@ -82,6 +82,10 @@ That maps onto the product without translation: the title block is how a page ge
 named, the register is the gallery, and the issue stamp is the page `/goghmode`
 reads. The stamp is the only saturated colour in the app, so the question "what is
 the agent looking at?" is answerable from across a desk.
+
+The register is the app's home screen. A sheet is somewhere you go and come back
+from, so it is pushed and the back button is the only "done" needed; new sheets are
+made only where sheets are kept.
 
 Refused, deliberately: the neutral dark thumbnail grid every gallery app ships, and
 its opposite, cream-paper notebook skeuomorphism with a serif.
@@ -116,14 +120,19 @@ SF carries everything, per platform convention. There is no brand face.
 
 ## Layout
 
-- The register is a grid of sheets on `register-ground`, two columns on iPad portrait,
-  three on landscape, one on iPhone.
-- A sheet is drawing area above, title block below, full width, no gap between them —
-  the block is part of the sheet, not a caption under a card.
-- The title block is a ruled form: hairline rules divide labelled cells, and cells
-  align across every sheet in the register so the eye can read down a column.
-- More space above a heading than below it; `gutter` between sheets, `margin` at the
-  register's edge.
+- The register is a **ruled index**, not a gallery grid: one sheet per line, on a
+  single block of paper laid on `register-ground`, hairline rules between lines.
+  A drawing set's register really is a table — sheet number, title, date, status —
+  and thirty sheets have to be scannable without scrolling a wall of thumbnails.
+- Columns are fixed-width and shared by the head row and every line, so numbers,
+  dates and stamps read straight down their columns: `SHEET`, `NAME` (flexible),
+  `UPDATED`, `STROKES`, `CLAUDE`. `UPDATED` and `STROKES` drop out at compact width;
+  the rest never move.
+- The head row carries the column names in drafting lettering, under a full rule.
+- Line height is set by the 40×54 preview, so it never grows with content. Previews
+  are small on purpose — enough to recognise a page, not enough to admire it.
+- `margin` at the register's edge; the paper block spans the reading width, capped so
+  lines never run longer than the eye tracks.
 
 ## Elevation & Depth
 
@@ -140,22 +149,36 @@ content.
 
 ## Components
 
-- **Sheet card** — drawing + title block. States: plain, issued (stamped), sent,
-  stacked (offset sheet edges visible behind), empty (ruled but unfilled block).
-- **Title block** — labelled cells: `SHEET` (mono number), `NAME` (editable),
-  `DATE`, `STROKES`.
+- **Register line** — preview, sheet number, name, facts, stamp control, chevron.
+  States: plain, issued (3px `stamp` bar on the leading edge plus the stamp itself),
+  dragging (lifts on a real offset shadow, being physically held).
+- **Register head** — column names in drafting lettering, above a full rule.
+- **Title block** — labelled cells: `SHEET` (mono number), `NAME`, `DATE`,
+  `STROKES`. Used where a sheet is presented as an object rather than a line — the
+  empty state's blank sheet.
+- **Stamp control** — the one control answering "which sheet does Claude read?".
+  Unstamped it is a quiet ruled button reading `STAMP`; on the stamped sheet the
+  control *is* the stamp, and pressing it lifts the stamp again. Exactly one stamp
+  exists across the whole register.
 - **Issue stamp** — uppercase, letter-spaced, rotated 2–3°, uneven ink edges,
-  arriving with a short impact settle. Exactly one exists across the whole register.
-- **Series** — a stack. Lettered prefix, cover sheet showing count, sheets numbered
-  within it.
+  arriving with a short impact settle.
+- **Series** — a stack. Lettered prefix, offset previews standing in for the sheets,
+  count in the `UPDATED` column, sheets numbered within it.
+- **Sheet preview** — 40×54, rendered from a source rect that grows to cover the
+  drawing. Load-bearing: a portrait-only rect crops away everything drawn on an iPad
+  held in landscape, which is a blank preview. Rendered against a light trait because
+  the preview sits on paper that stays light in both appearances.
 
 ## Do's and Don'ts
 
 - **Do** spend `stamp` red only on the issued stamp. A second red thing on screen
   destroys the one signal the design exists to carry.
-- **Do** make the title block an actual ruled form with visible cell divisions.
-- **Don't** render the title block as a plain caption row — that is the lazy version
-  and it forfeits the whole direction.
+- **Do** keep register columns aligned to shared widths. The moment a number drifts
+  out of its column the register stops being a register.
+- **Don't** let a preview grow large enough to compete with the drawing itself. The
+  register is for finding a sheet, not for reading it.
+- **Don't** render the register as a stack of cards, or as a plain iOS list with
+  `.secondary` grey captions — both forfeit the whole direction.
 - **Don't** add blueprint grids, drafting-paper textures, or graph-paper backgrounds.
   The sheet is white; the linework is the user's drawing.
 - **Don't** use monospace for anything except numbers and measurements.

@@ -140,11 +140,22 @@ final class PageStore: ObservableObject {
         selectedPageID = pageID
     }
 
-    func updateSelectedPage(with drawing: PKDrawing) {
-        guard let index = pages.firstIndex(where: { $0.id == selectedPageID }) else { return }
+    func page(_ pageID: String) -> NotebookPage? {
+        pages.first { $0.id == pageID }
+    }
+
+    /// Named rather than implied: the open sheet is addressed by id, so an in-flight
+    /// stroke can never land on whichever page the register happens to have
+    /// selected.
+    func update(_ pageID: String, with drawing: PKDrawing) {
+        guard let index = pages.firstIndex(where: { $0.id == pageID }) else { return }
         pages[index].drawingData = drawing.dataRepresentation()
         pages[index].updatedAt = Date()
         save()
+    }
+
+    func updateSelectedPage(with drawing: PKDrawing) {
+        update(selectedPageID, with: drawing)
     }
 
     func rename(_ pageID: String, to title: String) {

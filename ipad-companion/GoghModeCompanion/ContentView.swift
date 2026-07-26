@@ -1,16 +1,17 @@
 import PencilKit
 import SwiftUI
 
+/// The register is home. A sheet is somewhere you go and come back from, which is
+/// why the canvas is pushed rather than presented: the back button is the only
+/// "done" this app needs, and new sheets are only made where sheets are kept.
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("goghModeEndpoint") private var endpointText = ""
+    @AppStorage("goghModePaired") private var paired = false
     @StateObject private var uploader = UploadController()
     @StateObject private var pageStore = PageStore()
-    @State private var drawing = PKDrawing()
-    @State private var canvasSize = CGSize(width: 1024, height: 1366)
-    @State private var reloadSignal = 0
+    @State private var openPageID: String?
     @State private var showingSettings = false
-    @State private var showingRegister = false
 
     private var endpoint: GoghModeEndpoint? {
         GoghModeEndpoint(endpointText)
@@ -20,14 +21,14 @@ struct ContentView: View {
         ZStack {
             Sheet.ground.ignoresSafeArea()
 
-            if endpoint == nil || showingSettings {
+            if endpoint == nil || !paired {
                 SetupView(
                     endpointText: $endpointText,
                     isValid: endpoint != nil,
-                    onDone: { showingSettings = false }
+                    onDone: { paired = true }
                 )
             } else {
-                drawingView
+                register
             }
         }
         .onChange(of: scenePhase) { _, newPhase in
@@ -36,14 +37,127 @@ struct ContentView: View {
             if newPhase == .active {
                 uploader.retryIfOffline()
             }
-            // Leaving is when work is most likely to be lost: the app can be
-            // killed in the background before the debounce fires.
-            if newPhase == .background {
-                uploadCurrentPage()
+        }
+    }
+
+    private var register: some View {
+        NavigationStack {
+            RegisterView(
+                store: pageStore,
+                uploader: uploader,
+                endpointText: endpointText,
+                onOpen: { openPageID = $0 },
+                onNew: { openPageID = pageStore.addPage().id },
+                onSettings: { showingSettings = true }
+            )
+            .navigationDestination(item: $openPageID) { pageID in
+                CanvasView(
+                    store: pageStore,
+                    uploader: uploader,
+                    pageID: pageID,
+                    endpointText: endpointText
+                )
+            }
+        }
+        .sheet(isPresented: $showingSettings) {
+            SetupView(
+                endpointText: $endpointText,
+                isValid: endpoint != nil,
+                onDone: { showingSettings = false }
+            )
+        }
+    }
+}
+
+/// One sheet, open. Everything here is about the drawing: the register's facts stay
+/// in the register, and the only chrome is the state of the sheet in front of you.
+struct CanvasView: View {
+    @ObservedObject var store: PageStore
+    @ObservedObject var uploader: UploadController
+
+    let pageID: String
+    let endpointText: String
+
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var drawing = PKDrawing()
+    @State private var canvasSize = CGSize(width: 1024, height: 1366)
+    @State private var reloadSignal = 0
+    @State private var renaming = false
+    @State private var draftName = ""
+
+    private var page: NotebookPage? {
+        store.page(pageID)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if let message = uploader.pagesUnsupportedMessage {
+                Text(message)
+                    .font(.footnote)
+                    .foregroundStyle(Sheet.onGround)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Sheet.ground)
+            }
+
+            GeometryReader { geometry in
+                PencilCanvasView(drawing: $drawing, reloadSignal: $reloadSignal) { newDrawing, newCanvasSize in
+                    canvasSize = newCanvasSize == .zero ? geometry.size : newCanvasSize
+                    store.update(pageID, with: newDrawing)
+                    uploader.schedule(snapshot: snapshot(of: newDrawing), endpointText: endpointText)
+                }
+                .ignoresSafeArea(edges: .bottom)
+                .onAppear { canvasSize = geometry.size }
+            }
+        }
+        .background(Sheet.paper)
+        .navigationTitle(page?.title ?? "Sheet")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                StatusBadge(status: uploader.status, canRetry: uploader.canRetry) {
+                    uploader.retry()
+                }
+
+                if uploader.pinningSupported, let page {
+                    StampControl(isIssued: page.id == store.pinnedPageID, scale: 0.66) {
+                        toggleStamp(page)
+                    }
+                }
+
+                Button {
+                    draftName = page?.title ?? ""
+                    renaming = true
+                } label: {
+                    Label("Rename", systemImage: "pencil")
+                }
+
+                Button(action: clearSheet) {
+                    Label("Clear", systemImage: "eraser")
+                }
             }
         }
         .onAppear {
-            drawing = pageStore.selectedDrawing
+            store.select(pageID)
+            drawing = page?.drawing ?? PKDrawing()
+            reloadSignal += 1
+        }
+        // Leaving the sheet — back to the register, or the app being put away — is
+        // when work is most likely to be lost: the app can be killed in the
+        // background before the 600ms debounce fires.
+        .onDisappear { uploadCurrentSheet() }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .background {
+                uploadCurrentSheet()
+            }
+        }
+        .alert("Name this sheet", isPresented: $renaming) {
+            TextField("Sheet name", text: $draftName)
+            Button("Cancel", role: .cancel) { draftName = "" }
+            Button("Save") { commitRename() }
+        } message: {
+            Text("Names show in the register and travel to the Mac with the page.")
         }
     }
 
@@ -51,150 +165,40 @@ struct ContentView: View {
         DrawingSnapshot.fromPencilDrawing(
             pencilDrawing,
             canvasSize: canvasSize,
-            page: pageStore.selectedPage?.pageRef
+            page: page?.pageRef
         )
     }
 
-    private func uploadCurrentPage() {
+    private func uploadCurrentSheet() {
         uploader.uploadNow(snapshot: snapshot(of: drawing), endpointText: endpointText)
-    }
-
-    private func open(pageID: String) {
-        guard pageID != pageStore.selectedPageID else { return }
-
-        // The outgoing sheet goes up before the canvas swaps, so switching away
-        // never leaves an edit behind.
-        pageStore.updateSelectedPage(with: drawing)
-        uploadCurrentPage()
-
-        pageStore.select(pageID)
-        drawing = pageStore.selectedDrawing
-        reloadSignal += 1
-    }
-
-    private func addPage() {
-        pageStore.updateSelectedPage(with: drawing)
-        uploadCurrentPage()
-
-        pageStore.addPage()
-        drawing = PKDrawing()
-        reloadSignal += 1
     }
 
     private func clearSheet() {
         drawing = PKDrawing()
         reloadSignal += 1
-        pageStore.updateSelectedPage(with: drawing)
+        store.update(pageID, with: drawing)
         uploader.uploadNow(
-            snapshot: DrawingSnapshot.empty(
-                canvasSize: canvasSize,
-                page: pageStore.selectedPage?.pageRef
-            ),
+            snapshot: DrawingSnapshot.empty(canvasSize: canvasSize, page: page?.pageRef),
             endpointText: endpointText
         )
     }
 
-    private var drawingView: some View {
-        VStack(spacing: 0) {
-            toolbar
-
-            if let message = uploader.pagesUnsupportedMessage {
-                Text(message)
-                    .font(.footnote)
-                    .foregroundStyle(Sheet.onGround)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 10)
-                    .background(Sheet.ground)
-            }
-
-            GeometryReader { geometry in
-                PencilCanvasView(drawing: $drawing, reloadSignal: $reloadSignal) { newDrawing, newCanvasSize in
-                    canvasSize = newCanvasSize == .zero ? geometry.size : newCanvasSize
-                    pageStore.updateSelectedPage(with: newDrawing)
-                    uploader.schedule(snapshot: snapshot(of: newDrawing), endpointText: endpointText)
-                }
-                .ignoresSafeArea(edges: .bottom)
-                .onAppear { canvasSize = geometry.size }
-            }
-        }
-        .sheet(isPresented: $showingRegister) {
-            RegisterView(
-                store: pageStore,
-                uploader: uploader,
-                endpointText: endpointText,
-                onOpen: { open(pageID: $0) }
-            )
-        }
+    private func commitRename() {
+        store.rename(pageID, to: draftName)
+        draftName = ""
+        // The Mac keeps the title with the page, so a rename only reaches it on the
+        // next save. Send it now, so the register and the Mac never disagree about
+        // the name Claude is reading.
+        uploadCurrentSheet()
     }
 
-    /// The canvas header reads like the top rule of a sheet: which sheet this is,
-    /// and whether it is the stamped one.
-    private var toolbar: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                StatusBadge(status: uploader.status, canRetry: uploader.canRetry) {
-                    uploader.retry()
-                }
-
-                if uploader.pagesSupported {
-                    Button {
-                        pageStore.updateSelectedPage(with: drawing)
-                        showingRegister = true
-                    } label: {
-                        HStack(spacing: 8) {
-                            if let page = pageStore.selectedPage {
-                                SheetNumber(text: pageStore.sheetNumber(for: page))
-                                Text(page.title)
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(Sheet.onGround)
-                                    .lineLimit(1)
-                            }
-                            Image(systemName: "chevron.down")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(Sheet.onGroundSecondary)
-                        }
-                        .frame(minHeight: 44)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(Text("Open the register"))
-
-                    if pageStore.selectedPageID == pageStore.pinnedPageID {
-                        IssueStamp(scale: 0.72)
-                    }
-                }
-
-                Spacer(minLength: 0)
-
-                if uploader.pagesSupported {
-                    toolbarButton("New sheet", systemImage: "plus", action: addPage)
-                }
-                toolbarButton("Clear", systemImage: "eraser", action: clearSheet)
-                toolbarButton("Settings", systemImage: "gearshape") { showingSettings = true }
+    private func toggleStamp(_ page: NotebookPage) {
+        let target = page.id == store.pinnedPageID ? nil : page.id
+        Task {
+            if await uploader.pin(target, endpointText: endpointText) {
+                store.recordPin(target)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 4)
-
-            Rectangle().fill(Sheet.rule).frame(height: Sheet.hair)
         }
-        .background(Sheet.ground)
-    }
-
-    private func toolbarButton(
-        _ title: String,
-        systemImage: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.callout.weight(.semibold))
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(Sheet.onGround)
-        .accessibilityLabel(Text(title))
     }
 }
 
@@ -223,7 +227,7 @@ struct StatusBadge: View {
                         .lineLimit(1)
                 }
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 8)
             .frame(height: 44)
             .contentShape(Rectangle())
         }
@@ -295,7 +299,7 @@ struct SetupView: View {
                     .padding(.top, 12)
 
                 Button(action: onDone) {
-                    Text(isValid ? "Open the notebook" : "Waiting for an address")
+                    Text(isValid ? "Open the register" : "Waiting for an address")
                         .font(.callout.weight(.semibold))
                         .frame(maxWidth: .infinity)
                         .frame(height: 50)
