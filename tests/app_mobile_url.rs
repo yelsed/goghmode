@@ -16,7 +16,9 @@ fn desktop_app_uses_structured_polished_layout() {
     assert!(app_source.contains("configure_visuals"));
     assert!(app_source.contains("draw_toolbar"));
     assert!(app_source.contains("draw_canvas"));
-    assert!(app_source.contains("Send to Claude"));
+    // Vendor-neutral on purpose: the sheet goes to whichever agent reads the
+    // drawings directory, so the button must not name one.
+    assert!(app_source.contains("Send to agent"));
     assert!(app_source.contains("StatusBar"));
     assert!(app_source.contains("Frame::canvas"));
 }

@@ -32,6 +32,14 @@ final class UploadController: ObservableObject {
     /// itself rather than pretending a page switch means anything there.
     @Published private(set) var pagesSupported = true
 
+    /// False on a Mac that understands pages but not the stamp routes.
+    @Published private(set) var pinningSupported = true
+
+    /// Whether the two flags above are an answer or a guess. Until a Mac has
+    /// actually replied they are optimism, and a control drawn on optimism that
+    /// disappears the moment it is pressed reads as the app breaking.
+    @Published private(set) var macIsKnown = false
+
     private let client: GoghModeClient
     private var pendingUpload: Task<Void, Never>?
     private var lastSnapshot: DrawingSnapshot?
@@ -41,7 +49,7 @@ final class UploadController: ObservableObject {
     var pagesUnsupportedMessage: String? {
         pagesSupported
             ? nil
-            : "This Mac runs an older GoghMode, so pages are off. Update the Mac app."
+            : "GoghMode on the Mac is an older version, so pages are off. Update it there and reopen it."
     }
 
     var canRetry: Bool {
@@ -85,6 +93,21 @@ final class UploadController: ObservableObject {
         }
     }
 
+    /// Sends a sheet and waits for the Mac to have it. Stamping cannot fire and
+    /// forget: the Mac can only mirror a page it actually holds.
+    @discardableResult
+    func send(_ snapshot: DrawingSnapshot, endpointText: String) async -> Bool {
+        remember(snapshot, endpointText)
+        pendingUpload?.cancel()
+        do {
+            try await upload(snapshot, endpointText: endpointText, client: client)
+            return true
+        } catch {
+            status = .failed(guidance(for: error))
+            return false
+        }
+    }
+
     /// Re-sends the last drawing. Without this the status stays `Offline` forever
     /// once an upload fails, because nothing retries until the drawing changes —
     /// so quitting and reopening the Mac app looked like a permanent failure.
@@ -113,10 +136,101 @@ final class UploadController: ObservableObject {
         if let known = capabilitiesByEndpoint[endpointText] {
             return known
         }
-        let capabilities = await client.capabilities(of: endpoint)
+        guard let capabilities = await client.capabilities(of: endpoint) else {
+            // Unreachable, not old. Nothing is cached and nothing is concluded, so
+            // the next attempt asks again instead of inheriting a guess.
+            return .assumeCurrent
+        }
         capabilitiesByEndpoint[endpointText] = capabilities
         pagesSupported = capabilities.supportsPages
+        pinningSupported = capabilities.supportsPinning
+        macIsKnown = true
         return capabilities
+    }
+
+    /// Asks the Mac what it accepts before anything needs the answer, so controls
+    /// are drawn in the state they will actually behave in.
+    func learnWhatTheMacAccepts(endpointText: String) async {
+        guard let endpoint = GoghModeEndpoint(endpointText) else { return }
+        _ = await resolvedCapabilities(for: endpoint, endpointText: endpointText, client: client)
+    }
+
+    /// Forgets what a Mac said it accepts. Called when the address changes, and when
+    /// the app comes back — the Mac may have been updated in between, and a cached
+    /// "too old" answer would keep the stamp switched off forever.
+    func forgetWhatTheMacAccepts() {
+        capabilitiesByEndpoint.removeAll()
+        macIsKnown = false
+        pagesSupported = true
+        pinningSupported = true
+    }
+
+    /// Stamps a page as the one the agent reads, or clears the stamp with `nil`.
+    /// Returns whether the Mac accepted it, so the caller records the pin only
+    /// when it is actually true on disk.
+    func pin(_ pageID: String?, endpointText: String) async -> Bool {
+        guard let endpoint = GoghModeEndpoint(endpointText) else {
+            status = .failed(UploadError.invalidEndpoint.errorDescription ?? "")
+            return false
+        }
+
+        do {
+            let capabilities = await resolvedCapabilities(
+                for: endpoint,
+                endpointText: endpointText,
+                client: client
+            )
+            guard capabilities.supportsPinning else {
+                // Deliberately not a `.failed` status. A capability verdict is not an
+                // upload failure, and nothing clears a failure until an upload
+                // succeeds — so setting one here left "the Mac app is an older
+                // version" on screen long after the Mac had been updated. The
+                // register reads the capabilities directly and says so for exactly as
+                // long as it is true.
+                return false
+            }
+            try await client.pin(pageID, on: endpoint)
+            return true
+        } catch {
+            status = .failed(guidance(for: error))
+            return false
+        }
+    }
+
+    /// Names the app, not the machine. The first version said "this Mac is too old",
+    /// which reads as a verdict on the hardware for something a reopen fixes.
+    static let macAppOutOfDate =
+        "GoghMode on the Mac is an older version that cannot stamp sheets yet. Update it there and reopen it."
+
+    /// Sends one page now without moving the stamp.
+    func promote(_ pageID: String, endpointText: String) async -> Bool {
+        guard let endpoint = GoghModeEndpoint(endpointText) else {
+            status = .failed(UploadError.invalidEndpoint.errorDescription ?? "")
+            return false
+        }
+
+        do {
+            let capabilities = await resolvedCapabilities(
+                for: endpoint,
+                endpointText: endpointText,
+                client: client
+            )
+            guard capabilities.supportsPinning else {
+                // Deliberately not a `.failed` status. A capability verdict is not an
+                // upload failure, and nothing clears a failure until an upload
+                // succeeds — so setting one here left "the Mac app is an older
+                // version" on screen long after the Mac had been updated. The
+                // register reads the capabilities directly and says so for exactly as
+                // long as it is true.
+                return false
+            }
+            try await client.promote(pageID, on: endpoint)
+            status = .saved(Date())
+            return true
+        } catch {
+            status = .failed(guidance(for: error))
+            return false
+        }
     }
 
     private func upload(_ snapshot: DrawingSnapshot, endpointText: String, client: GoghModeClient) async throws {
@@ -140,6 +254,15 @@ final class UploadController: ObservableObject {
             // reachable. One retry separates a dead socket from a dead server.
             try await Task.sleep(for: .milliseconds(300))
             try await client.upload(outgoing, to: endpoint)
+        }
+
+        // A save that lands is the strongest evidence there is: the Mac is reachable,
+        // and if it took a page it understands pages. Any standing complaint about it
+        // is now out of date, so it goes rather than waiting to be re-probed.
+        if outgoing.page != nil, !pagesSupported {
+            pagesSupported = true
+            capabilitiesByEndpoint.removeValue(forKey: endpointText)
+            macIsKnown = false
         }
         status = .saved(Date())
     }

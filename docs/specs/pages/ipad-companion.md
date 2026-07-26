@@ -12,28 +12,36 @@ Universal build: iPhone and iPad (`TARGETED_DEVICE_FAMILY = "1,2"`), iOS 17
 minimum.
 
 ## Layout
-Two states in one root view.
+Setup until paired, then a `NavigationStack` whose root is the register.
 
 - **Setup** — a text field for the Mac's mobile URL, persisted in
-  `@AppStorage("goghModeEndpoint")`. This is the entire pairing story.
-- **Drawing** — a toolbar row above a full-bleed canvas:
-  - Status badge (also the retry button)
-  - Save Now
-  - Clear
-  - Settings (back to the URL field)
-  - `PKCanvasView` filling everything below, with the system tool palette floating
-    over it.
+  `@AppStorage("goghModeEndpoint")`; `@AppStorage("goghModePaired")` records that the
+  user pressed through, so a half-typed address does not throw them into the app.
+  Reachable again later as a settings sheet.
+- **Register** (root, `RegisterView`) — the overview. Head rule naming the stamped
+  sheet, then a ruled index: one line per sheet or series, columns `SHEET`, `NAME`,
+  `UPDATED`, `STROKES`, `CLAUDE`. Toolbar carries **New sheet** and **Settings** —
+  new sheets are made here and nowhere else. Dragging one line onto another files
+  both into a series; a series line pushes `SeriesView`, the same index scoped to it.
+- **Canvas** (`CanvasView`, pushed) — a full-bleed `PKCanvasView` with the system
+  tool palette floating over it. Navigation title is the sheet's name; the back
+  button returns to the register. Toolbar: status badge (also retry), stamp control,
+  rename, clear. Leaving the sheet uploads it immediately rather than waiting out the
+  debounce.
 
 ## Components
 
 | File | Responsibility |
 | --- | --- |
 | `GoghModeCompanionApp.swift` | `@main`, single `WindowGroup`. |
-| `ContentView.swift` | Setup vs drawing state, owns `PKDrawing`, canvas size, clear signal. |
+| `ContentView.swift` | Pairing gate, the navigation stack, `CanvasView`, `StatusBadge`, `SetupView`. |
+| `RegisterView.swift` | The overview: head rule, ruled index, rows, stamp control, series, previews. |
+| `PageStore.swift` | Local pages and series, persistence, sheet numbering, recorded pin. |
+| `DrawingSetStyle.swift` | The Drawing Set tokens and the shared drafting primitives. |
 | `PencilCanvasView.swift` | `UIViewRepresentable` around `PKCanvasView` + `PKToolPicker`. |
 | `DrawingSnapshot.swift` | Codable wire schema and the `PKDrawing` → snapshot conversion. |
-| `GoghModeClient.swift` | Endpoint normalization, `URLSession` POST, `UploadError`. |
-| `UploadController.swift` | `@MainActor ObservableObject` — debounce, status machine, retry. |
+| `GoghModeClient.swift` | Endpoint normalization, `URLSession` POST, capabilities, pin/promote, `UploadError`. |
+| `UploadController.swift` | `@MainActor ObservableObject` — debounce, status machine, retry, capability probe. |
 
 ### Sub-component specs
 - [export-contract](../components/export-contract.md) — the schema this app must match exactly.

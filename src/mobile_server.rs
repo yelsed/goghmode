@@ -23,7 +23,7 @@ const SUPPORTED_SCHEMA_VERSIONS: [u8; 2] = [1, 2];
 /// Lets a companion ask what this Mac understands instead of inferring it from
 /// a rejection. An older Mac has no such route and answers 404, which is itself
 /// a usable answer.
-const CAPABILITIES: &[u8] = br#"{"schemaVersions":[1,2],"features":["pages"]}"#;
+const CAPABILITIES: &[u8] = br#"{"schemaVersions":[1,2],"features":["pages","pin","promote"]}"#;
 
 pub const DEFAULT_PORT: u16 = 8787;
 
@@ -172,6 +172,10 @@ fn handle_connection(stream: &mut TcpStream, route_prefix: &str, drawings_dir: &
     if request.method == "POST" {
         if path == format!("{route_prefix}save") {
             handle_save_request(stream, drawings_dir, &request.body);
+        } else if path == format!("{route_prefix}pin") {
+            handle_pin_request(stream, drawings_dir, &request.body);
+        } else if path == format!("{route_prefix}promote") {
+            handle_promote_request(stream, drawings_dir, &request.body);
         } else {
             write_response(
                 stream,
@@ -320,6 +324,72 @@ fn handle_save_request(stream: &mut TcpStream, drawings_dir: &Path, body: &[u8])
             "text/plain; charset=utf-8",
             b"Internal Server Error",
         ),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct PageIdRequest {
+    #[serde(rename = "pageId")]
+    page_id: Option<String>,
+}
+
+fn page_id_request(body: &[u8]) -> Result<Option<String>, String> {
+    let request: PageIdRequest = serde_json::from_slice(body)
+        .map_err(|error| format!("could not parse the request: {error}"))?;
+    match request.page_id {
+        Some(page_id) if !page_id_is_safe(&page_id) => Err(format!(
+            "page id {page_id:?} is not usable as a folder name (letters, digits, - and _ only, up to 64)"
+        )),
+        page_id => Ok(page_id),
+    }
+}
+
+/// Pins the page `latest.*` follows, or clears the pin with a null id. Without a
+/// pin, `latest.*` keeps following whatever was written last.
+fn handle_pin_request(stream: &mut TcpStream, drawings_dir: &Path, body: &[u8]) {
+    let page_id = match page_id_request(body) {
+        Ok(page_id) => page_id,
+        Err(reason) => {
+            reject_owned(stream, reason);
+            return;
+        }
+    };
+
+    match crate::pages::set_pin(drawings_dir, page_id.as_deref()) {
+        Ok(()) => write_response(
+            stream,
+            200,
+            "OK",
+            "application/json; charset=utf-8",
+            br#"{"ok":true}"#,
+        ),
+        Err(error) => reject_owned(stream, format!("could not pin that page: {error}")),
+    }
+}
+
+/// Points `latest.*` at one stored page without moving the pin.
+fn handle_promote_request(stream: &mut TcpStream, drawings_dir: &Path, body: &[u8]) {
+    let page_id = match page_id_request(body) {
+        Ok(Some(page_id)) => page_id,
+        Ok(None) => {
+            reject_owned(stream, "promote needs a pageId".to_owned());
+            return;
+        }
+        Err(reason) => {
+            reject_owned(stream, reason);
+            return;
+        }
+    };
+
+    match crate::pages::promote_page(drawings_dir, &page_id) {
+        Ok(_) => write_response(
+            stream,
+            200,
+            "OK",
+            "application/json; charset=utf-8",
+            br#"{"ok":true}"#,
+        ),
+        Err(error) => reject_owned(stream, format!("could not send that page: {error}")),
     }
 }
 
