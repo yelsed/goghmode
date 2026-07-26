@@ -43,9 +43,14 @@ pub struct DrawingSnapshot {
 
 pub const CURRENT_SCHEMA_VERSION: u8 = 2;
 
-/// The page the Mac canvas owns. Without it the desktop app keeps overwriting
-/// whichever page the iPad sent last.
-pub const MAC_SCRATCH_PAGE_ID: &str = "mac-scratch";
+/// The page the desktop canvas owns. Without it the desktop app keeps
+/// overwriting whichever page the iPad sent last.
+///
+/// The value stays `"mac-scratch"` on purpose: it is a directory name that
+/// already exists under `drawings/pages/`, so renaming it would orphan every
+/// scratch page written so far. Only the constant and the visible title lost
+/// their Mac-specific wording.
+pub const DESKTOP_SCRATCH_PAGE_ID: &str = "mac-scratch";
 
 /// Where snapshots from schema version 1 clients land, so they gain history
 /// without knowing pages exist.
@@ -164,8 +169,8 @@ impl Drawing {
         DrawingSnapshot {
             schema_version: CURRENT_SCHEMA_VERSION,
             page: Some(PageRef {
-                id: MAC_SCRATCH_PAGE_ID.to_owned(),
-                title: Some("Mac scratch".to_owned()),
+                id: DESKTOP_SCRATCH_PAGE_ID.to_owned(),
+                title: Some("Desktop scratch".to_owned()),
             }),
             canvas: self.canvas.clone(),
             strokes,

@@ -14,8 +14,8 @@ description: Use when the user asks to inspect a sketch, drawing, whiteboard, di
 
 Use this skill when the user wants you to inspect the latest GoghMode sketch.
 
-GoghMode always writes to the same place, whether it was started from a terminal, Spotlight, or
-Raycast:
+GoghMode always writes to the same place, whether it was started from a terminal, Spotlight,
+Raycast, or a Linux application launcher:
 
 - `~/Pictures/GoghMode/drawings/latest.json`
 - `~/Pictures/GoghMode/drawings/latest.svg`
@@ -41,7 +41,7 @@ stat -f "%Sm %N" drawings/latest.json ~/Pictures/GoghMode/drawings/latest.json 2
 
 Use whichever is newer, and say which one you read.
 
-If neither location has the files, ask the user to open `goghmode`, draw once, and release the pointer or tap Send to Mac.
+If neither location has the files, ask the user to open `goghmode`, draw once, and release the pointer or tap Send to desktop.
 "#;
 
 pub fn skill_path(target: SkillTarget, home_dir: &Path) -> PathBuf {

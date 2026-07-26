@@ -148,7 +148,7 @@ pub fn rebuild_index(drawings_dir: impl AsRef<Path>) -> anyhow::Result<PathBuf> 
     Ok(index_path)
 }
 
-/// Newest first, which is the order the Mac browser shows them in.
+/// Newest first, which is the order the desktop page browser shows them in.
 pub fn list_pages(drawings_dir: impl AsRef<Path>) -> Vec<PageEntry> {
     let directory = pages_dir(drawings_dir.as_ref());
     let Ok(entries) = fs::read_dir(&directory) else {

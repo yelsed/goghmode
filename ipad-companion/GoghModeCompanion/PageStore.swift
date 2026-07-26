@@ -21,7 +21,7 @@ struct NotebookPage: Codable, Equatable, Identifiable {
 }
 
 /// The iPad's own copy of every page. This is the write that makes work
-/// survive — the Mac holds a mirror, so a page drawn while the Mac is closed is
+/// survive — the host holds a mirror, so a page drawn while it is closed is
 /// still here when it comes back.
 @MainActor
 final class PageStore: ObservableObject {
@@ -72,7 +72,7 @@ final class PageStore: ObservableObject {
         guard let index = pages.firstIndex(where: { $0.id == selectedPageID }) else { return }
         pages[index].drawingData = drawing.dataRepresentation()
         pages[index].updatedAt = Date()
-        // Newest first, matching how the Mac lists them.
+        // Newest first, matching how the host lists them.
         let page = pages.remove(at: index)
         pages.insert(page, at: 0)
         save()

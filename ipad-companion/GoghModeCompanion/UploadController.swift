@@ -28,7 +28,7 @@ final class UploadController: ObservableObject {
 
     @Published private(set) var status: Status = .idle
 
-    /// False once a Mac has told us it predates pages. The page switcher hides
+    /// False once a host has told us it predates pages. The page switcher hides
     /// itself rather than pretending a page switch means anything there.
     @Published private(set) var pagesSupported = true
 
@@ -41,7 +41,7 @@ final class UploadController: ObservableObject {
     var pagesUnsupportedMessage: String? {
         pagesSupported
             ? nil
-            : "This Mac runs an older GoghMode, so pages are off. Update the Mac app."
+            : "This desktop runs an older GoghMode, so pages are off. Update the desktop app."
     }
 
     var canRetry: Bool {
@@ -87,7 +87,7 @@ final class UploadController: ObservableObject {
 
     /// Re-sends the last drawing. Without this the status stays `Offline` forever
     /// once an upload fails, because nothing retries until the drawing changes —
-    /// so quitting and reopening the Mac app looked like a permanent failure.
+    /// so quitting and reopening the desktop app looked like a permanent failure.
     func retry() {
         guard let snapshot = lastSnapshot else { return }
         uploadNow(snapshot: snapshot, endpointText: lastEndpointText)
@@ -103,7 +103,7 @@ final class UploadController: ObservableObject {
         lastEndpointText = endpointText
     }
 
-    /// One probe per endpoint, cached. Asking the Mac what it takes is cheaper
+    /// One probe per endpoint, cached. Asking the host what it takes is cheaper
     /// and clearer than sending version 2 and reading the rejection.
     private func resolvedCapabilities(
         for endpoint: GoghModeEndpoint,
@@ -135,8 +135,8 @@ final class UploadController: ObservableObject {
         do {
             try await client.upload(outgoing, to: endpoint)
         } catch let error as URLError where error.isWorthRetrying {
-            // URLSession can hand back a pooled socket the Mac already closed,
-            // which surfaces as `networkConnectionLost` even though the Mac is
+            // URLSession can hand back a pooled socket the host already closed,
+            // which surfaces as `networkConnectionLost` even though the host is
             // reachable. One retry separates a dead socket from a dead server.
             try await Task.sleep(for: .milliseconds(300))
             try await client.upload(outgoing, to: endpoint)
@@ -155,11 +155,11 @@ final class UploadController: ObservableObject {
 
         return switch urlError.code {
         case .networkConnectionLost, .cannotConnectToHost, .timedOut:
-            "Mac not answering. Open GoghMode on the Mac, then tap to retry."
+            "Desktop not answering. Open GoghMode there, then tap to retry."
         case .notConnectedToInternet:
-            "No network. Join the same Wi-Fi as the Mac."
+            "No network. Join the same Wi-Fi as the desktop."
         case .cannotFindHost, .dnsLookupFailed:
-            "Address not found. Copy the mobile URL from the Mac again."
+            "Address not found. Copy the mobile URL from the desktop again."
         default:
             urlError.localizedDescription
         }
@@ -168,7 +168,7 @@ final class UploadController: ObservableObject {
 
 private extension URLError {
     /// Failures that a second attempt can plausibly clear, as opposed to a wrong
-    /// address or a Mac that is genuinely not running the app.
+    /// address or a host that is genuinely not running the app.
     var isWorthRetrying: Bool {
         switch code {
         case .networkConnectionLost, .timedOut, .cannotConnectToHost:

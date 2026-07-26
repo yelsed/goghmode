@@ -72,8 +72,8 @@ fn run() -> anyhow::Result<()> {
             let home_dir =
                 home::home_dir().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
             let executable_path = std::env::current_exe()?;
-            let path = app_install::install_macos_app(&home_dir, &executable_path)?;
-            println!("Installed macOS app at {}", path.display());
+            let path = app_install::install_app(&home_dir, &executable_path)?;
+            println!("Installed GoghMode at {}", path.display());
             Ok(())
         }
         None => run_app(cli.drawings_dir.unwrap_or_else(default_drawings_dir)),

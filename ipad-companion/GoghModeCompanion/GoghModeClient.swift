@@ -41,13 +41,13 @@ struct GoghModeEndpoint: Equatable {
     }
 }
 
-/// What a Mac says it accepts. A Mac from before pages has no such route and
-/// answers 404, which the app reads as "schema version 1 only".
+/// What a host says it accepts. A host from before pages has no such route
+/// and answers 404, which the app reads as "schema version 1 only".
 struct GoghModeCapabilities: Codable, Equatable {
     let schemaVersions: [Int]
     let features: [String]
 
-    static let pagelessMac = GoghModeCapabilities(
+    static let pagelessHost = GoghModeCapabilities(
         schemaVersions: [pagelessSchemaVersion],
         features: []
     )
@@ -60,15 +60,15 @@ struct GoghModeCapabilities: Codable, Equatable {
 struct GoghModeClient {
     var session: URLSession = .shared
 
-    /// Asks the Mac what it accepts. Probing beats inferring from a rejection:
-    /// a 404 here is an old Mac, and anything else unreadable is treated the
+    /// Asks the host what it accepts. Probing beats inferring from a rejection:
+    /// a 404 here is an old host, and anything else unreadable is treated the
     /// same way, so the drawing still gets through as version 1.
     func capabilities(of endpoint: GoghModeEndpoint) async -> GoghModeCapabilities {
         guard let (data, response) = try? await session.data(from: endpoint.capabilitiesURL),
               let httpResponse = response as? HTTPURLResponse,
               (200..<300).contains(httpResponse.statusCode),
               let capabilities = try? JSONDecoder().decode(GoghModeCapabilities.self, from: data) else {
-            return .pagelessMac
+            return .pagelessHost
         }
         return capabilities
     }
@@ -98,11 +98,11 @@ enum UploadError: Error, Equatable, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidEndpoint:
-            "Paste the Mac mobile URL from GoghMode."
+            "Paste the mobile URL from GoghMode on your desktop."
         case .invalidResponse:
-            "The Mac did not send a valid response."
+            "The desktop did not send a valid response."
         case .serverStatus(let status):
-            "The Mac rejected the drawing with status \(status)."
+            "The desktop rejected the drawing with status \(status)."
         }
     }
 }

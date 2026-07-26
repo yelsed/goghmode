@@ -13,7 +13,7 @@ services.
 | Piece | Why it's here |
 | --- | --- |
 | Rust 2021, `rust-version = 1.78` | The desktop app, the local server, and the exporters are one binary. |
-| `eframe` / `egui` 0.34 | Native macOS window and immediate-mode UI. The canvas is an `egui::Painter`, not a widget tree. |
+| `eframe` / `egui` 0.34 | Native desktop window and immediate-mode UI, on macOS and Linux. The canvas is an `egui::Painter`, not a widget tree. |
 | `clap` 4.5 (derive) | Three subcommands plus `--drawings-dir`. |
 | `serde` / `serde_json` 1.0 | `DrawingSnapshot` is the cross-platform wire format; `serde_json` also parses untrusted upload bodies. |
 | `image` 0.25, `default-features = false`, `features = ["png"]` | PNG encode only. GoghMode rasterizes by hand, so no decoders or other codecs are pulled in. |
@@ -73,7 +73,7 @@ through one function.
 | `src/mobile_server.rs` | Blocking HTTP/1.1 server: serves the embedded web app, accepts snapshot uploads, validates them. |
 | `src/prompt.rs` | Two hardcoded prompt strings (generic and Claude) plus `PromptTarget`. |
 | `src/skill.rs` | The embedded `SKILL.md` text and its installer. |
-| `src/app_install.rs` | Builds `~/Applications/GoghMode.app` — plist, launcher script, binary copy, ad-hoc codesign. |
+| `src/app_install.rs` | Makes the host launchable: `~/Applications/GoghMode.app` on macOS (plist, launcher script, binary copy, ad-hoc codesign), a `~/.local/share` desktop entry and icon on Linux. `install_app` is the only place that picks between them. |
 
 ## The wire contract
 
@@ -126,7 +126,7 @@ There is no database, no cache, and no read path. Data moves one way:
 
 These four hold today and must keep holding:
 
-1. **The Mac owns the output directory.** No client writes to it directly.
+1. **The host owns the output directory.** No client writes to it directly.
 2. **Every writer goes through `export::write_snapshot`.** No parallel file format,
    no second serializer.
 3. **The prompt and skill always point at `drawings/latest.*`.**
@@ -212,7 +212,7 @@ Documented rather than fixed. Each is a live item in [PLANNING.md](PLANNING.md).
 | --- | --- |
 | Port 8787 taken → fallback to an ephemeral port | The token is stable, so a stale iPad URL still *looks* right while pointing at a dead port. No longer silent on the desktop: `port_warning()` (`src/app.rs:62`) is rendered in the toolbar. The tablet still sees only an `Offline` badge. |
 | SVG background is hardcoded `#ffffff` | The web app's cream paper tone (`rgb(250, 249, 244)`) is dropped on export. |
-| Mobile service worker caches the app shell forever | A change to `mobile/index.html` does not reach an installed progressive web app until the cache name `goghmode-mobile-v1` is bumped. |
+| Mobile service worker caches the app shell forever | A change to `mobile/index.html` does not reach an installed progressive web app until the cache name (`goghmode-mobile-v2`) is bumped. |
 
 ## Conventions
 

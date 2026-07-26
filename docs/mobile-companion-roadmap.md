@@ -22,7 +22,7 @@
 - Opening workflow: run `goghmode`, put the phone or iPad on the same Wi-Fi, then use Copy mobile URL or open the `Mobile: http://...` URL shown in the desktop toolbar.
 - The desktop app starts a local HTTP server while it is open. The URL includes a persistent random path for local safety and home-screen shortcuts.
 - Let the user draw with touch, Apple Pencil, trackpad, or mouse in the browser.
-- `Send to Mac` posts the `DrawingSnapshot` shape to the desktop app and writes through `src/export.rs`.
+- `Send to desktop` posts the `DrawingSnapshot` shape to the desktop app and writes through `src/export.rs`.
 - Keep the output files unchanged: `drawings/latest.svg`, `drawings/latest.png`, and `drawings/latest.json`.
 - Keep export buttons for device-local `goghmode-latest.svg`, `goghmode-latest.png`, and `goghmode-latest.json` downloads.
 - Do not add accounts, cloud storage, hosted deployment, or public tunnels in this MVP.

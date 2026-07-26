@@ -7,7 +7,7 @@ mod export;
 #[path = "../src/pages.rs"]
 mod pages;
 
-use drawing::{Drawing, CURRENT_SCHEMA_VERSION, MAC_SCRATCH_PAGE_ID};
+use drawing::{Drawing, CURRENT_SCHEMA_VERSION, DESKTOP_SCRATCH_PAGE_ID};
 use export::{snapshot_to_rgba, write_snapshot};
 use pages::{list_pages, page_id_is_safe, write_page};
 use std::fs;
@@ -87,8 +87,16 @@ fn write_snapshot_leaves_no_temporary_files_after_success() {
     assert_eq!(temporary_count, 0);
 }
 
+/// The constant lost its Mac-specific name; the value must not follow it. It is
+/// a directory name under `drawings/pages/`, so changing it orphans every
+/// scratch page already on disk — silent data loss wearing a cleanup's clothes.
 #[test]
-fn mac_canvas_writes_its_own_page_instead_of_only_latest() {
+fn desktop_scratch_page_keeps_its_on_disk_identifier() {
+    assert_eq!(DESKTOP_SCRATCH_PAGE_ID, "mac-scratch");
+}
+
+#[test]
+fn desktop_canvas_writes_its_own_page_instead_of_only_latest() {
     let temp = tempfile::tempdir().unwrap();
     let mut drawing = Drawing::new(60.0, 40.0);
     drawing.begin_stroke(5.0, 5.0, 0.5, 1);
@@ -97,7 +105,7 @@ fn mac_canvas_writes_its_own_page_instead_of_only_latest() {
 
     write_page(&drawing.snapshot(), temp.path()).unwrap();
 
-    let page_dir = temp.path().join("pages").join(MAC_SCRATCH_PAGE_ID);
+    let page_dir = temp.path().join("pages").join(DESKTOP_SCRATCH_PAGE_ID);
     assert!(page_dir.join("page.json").exists());
     assert!(page_dir.join("page.svg").exists());
     assert!(page_dir.join("page.png").exists());

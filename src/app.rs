@@ -15,6 +15,14 @@ use crate::prompt::{prompt_text, PromptTarget};
 const THUMBNAIL_WIDTH: u32 = 240;
 const THUMBNAIL_HEIGHT: u32 = 160;
 
+/// macOS ships `open`; Linux desktops ship `xdg-open`. This is the only place
+/// in the running application that has to know which platform it is on.
+const FILE_MANAGER_COMMAND: &str = if cfg!(target_os = "macos") {
+    "open"
+} else {
+    "xdg-open"
+};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum View {
     Canvas,
@@ -87,9 +95,16 @@ impl GoghModeApp {
     fn reveal_drawings_dir(&mut self) {
         let target = &self.drawings_dir;
         let _ = std::fs::create_dir_all(target);
-        self.status = match std::process::Command::new("open").arg(target).spawn() {
+        self.status = match std::process::Command::new(FILE_MANAGER_COMMAND)
+            .arg(target)
+            .spawn()
+        {
             Ok(_) => format!("Opened {}", target.display()),
-            Err(error) => format!("Could not open the drawings folder: {error}"),
+            // Naming the command matters on Linux, where `xdg-open` comes from a
+            // package that can genuinely be missing rather than being guaranteed.
+            Err(error) => {
+                format!("Could not open the drawings folder with {FILE_MANAGER_COMMAND}: {error}")
+            }
         };
     }
 
@@ -169,7 +184,7 @@ impl GoghModeApp {
     }
 
     fn save_with_status(&mut self, success_status: &str) -> anyhow::Result<()> {
-        // Writes the `mac-scratch` page, not whichever page the iPad sent last.
+        // Writes the desktop scratch page, not whichever page the iPad sent last.
         let result = write_page(&self.drawing.snapshot(), &self.drawings_dir).map(|_| ());
         match result {
             Ok(()) => {

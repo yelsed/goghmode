@@ -14,7 +14,7 @@ framework.
 
 - **Header** — eyebrow "Local sketchpad", `h1` GoghMode, and a status paragraph with
   `role="status"` / `aria-live="polite"`.
-- **Toolbar** — primary actions (Send to Mac, Share PNG) and secondary actions
+- **Toolbar** — primary actions (Send to desktop, Share PNG) and secondary actions
   (Undo, Clear, Export SVG, Export JSON, Export PNG, brush slider 1–32).
 - **Canvas** — `aspect-ratio: 8 / 5`, `min-height: 330px`,
   `max-height: calc(100svh - 230px)`, 24 px radius, cream paper, soft shadow.
@@ -29,7 +29,7 @@ Plain HTML elements. No component library.
 - `<button>` for every action; the status paragraph is the only feedback channel.
 
 ### Sub-component specs
-- [mobile-server-api](../components/mobile-server-api.md) — where **Send to Mac** posts.
+- [mobile-server-api](../components/mobile-server-api.md) — where **Send to desktop** posts.
 - [export-contract](../components/export-contract.md) — what the Mac writes on receipt.
 
 ## Design tokens
@@ -58,7 +58,7 @@ Note the ink here is `rgb(30,35,48)`, slightly different from the desktop's
   the token never appears in the JavaScript. Whatever secret path served the page
   is the path it posts to.
 - **Offline shell:** `service-worker.js`, cache-first, cache name
-  `goghmode-mobile-v1`. It caches the shell only and must never cache
+  `goghmode-mobile-v2`. It caches the shell only and must never cache
   `drawings/latest*` or `goghmode-latest*` — a test asserts this.
 - **Installable:** `manifest.webmanifest`, `display: standalone`, with **relative**
   `start_url` and `scope` so it works under any token path.
@@ -98,13 +98,13 @@ No framework, no store, nothing persisted between reloads.
 
 | State | Behaviour |
 | --- | --- |
-| Default | "Draw on the paper. Send to Mac when ready." |
+| Default | "Draw on the paper. Send to desktop when ready." |
 | Drawing | Stroke drawn live; no status change. |
 | Sending | Send button disabled for the duration of the request. |
 | Sent | Status: success, and a nudge to type `/goghmode` in Claude Code. |
 | Send failed | Status explains what to check — keep GoghMode open on the Mac, same Wi-Fi. |
 | Rejected (400) | The server's named reason is the response body; the status line surfaces it rather than a generic failure. |
-| Offline / installed as a progressive web app | Shell loads from cache; **Send to Mac** fails until the Mac is reachable. |
+| Offline / installed as a progressive web app | Shell loads from cache; **Send to desktop** fails until the host is reachable. |
 
 ## Estimate
 Shipped. Only remaining work is listed.
@@ -113,7 +113,7 @@ Shipped. Only remaining work is listed.
 | --- | --- |
 | Markup, styling, canvas | shipped |
 | Pointer handling & rendering | shipped |
-| Send to Mac + local exports | shipped |
+| Send to desktop + local exports | shipped |
 | Progressive web app shell | shipped |
 | Page switcher (Phase 1) | not estimated — see [PLANNING.md](../../PLANNING.md) |
 | **Total** | — |

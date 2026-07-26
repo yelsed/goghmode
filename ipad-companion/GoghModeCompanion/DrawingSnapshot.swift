@@ -54,7 +54,7 @@ extension DrawingSnapshot {
         )
     }
 
-    /// A Mac that predates pages rejects anything above version 1, so the app
+    /// A host that predates pages rejects anything above version 1, so the app
     /// sends the same drawing without its page rather than not at all.
     func withoutPage() -> DrawingSnapshot {
         DrawingSnapshot(
@@ -75,7 +75,7 @@ extension DrawingSnapshot {
         let strokes = drawing.strokes.enumerated().compactMap { strokeIndex, pencilStroke -> Stroke? in
             let points = pencilStroke.path.enumerated().map { pointIndex, strokePoint in
                 // Full Double precision costs ~250 bytes per point on the wire and
-                // the Mac stores f32 regardless, so the extra digits are discarded
+                // the host stores f32 regardless, so the extra digits are discarded
                 // after inflating every upload. Rounding happens before clamping so
                 // a rounded-up value can never land outside the canvas.
                 Point(

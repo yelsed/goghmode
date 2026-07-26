@@ -27,7 +27,7 @@ struct ContentView: View {
             }
         }
         .onChange(of: scenePhase) { _, newPhase in
-            // Coming back to the app is the moment the Mac is most likely to
+            // Coming back to the app is the moment the host is most likely to
             // have been reopened, so it is the natural time to re-check.
             if newPhase == .active {
                 uploader.retryIfOffline()
@@ -86,13 +86,13 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("GoghMode Companion")
                     .font(.largeTitle.bold())
-                Text("Paste the Mac mobile URL from GoghMode. The app will send your PencilKit drawing to the Mac as `drawings/latest.*`.")
+                Text("Paste the mobile URL from GoghMode on your desktop. The app will send your PencilKit drawing there as `drawings/latest.*`.")
                     .font(.body)
                     .foregroundStyle(.secondary)
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("Mac URL")
+                Text("Desktop URL")
                     .font(.headline)
                 TextField("http://192.168.1.10:8787/token/", text: $endpointText)
                     .keyboardType(.URL)
@@ -100,7 +100,7 @@ struct ContentView: View {
                     .autocorrectionDisabled()
                     .textFieldStyle(.roundedBorder)
                 if !endpointText.isEmpty && endpoint == nil {
-                    Text("Use the full mobile URL from the Mac app. It must start with http:// or https://.")
+                    Text("Use the full mobile URL from the desktop app. It must start with http:// or https://.")
                         .font(.footnote)
                         .foregroundStyle(.red)
                 }

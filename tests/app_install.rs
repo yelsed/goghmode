@@ -3,6 +3,83 @@ mod app_install;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+
+fn files_under(directory: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(files_under(&path));
+        } else {
+            found.push(path);
+        }
+    }
+    found
+}
+
+#[test]
+fn linux_install_writes_a_desktop_entry_and_icon() {
+    let home = tempfile::tempdir().unwrap();
+    let executable = home.path().join("bin").join("goghmode");
+
+    let entry_path = app_install::linux::install(home.path(), &executable).unwrap();
+
+    assert_eq!(entry_path, app_install::linux::desktop_entry_path(home.path()));
+    let entry = fs::read_to_string(&entry_path).unwrap();
+    assert!(entry.starts_with("[Desktop Entry]"));
+    assert!(entry.contains("Type=Application"));
+    assert!(entry.contains("Name=GoghMode"));
+    assert!(entry.contains("Icon=goghmode"));
+    assert!(entry.contains("Terminal=false"));
+    // Quoted, so a home directory containing a space does not turn the path into
+    // an executable plus an argument.
+    assert!(entry.contains(&format!("Exec=\"{}\"", executable.display())));
+
+    let icon = fs::read(app_install::linux::desktop_icon_path(home.path())).unwrap();
+    assert!(!icon.is_empty());
+}
+
+/// Omarchy owns `~/.local/share/omarchy/`. Writing anywhere near it — or
+/// anywhere outside the two standard directories — is the failure this guards.
+#[test]
+fn linux_install_touches_only_standard_per_user_directories() {
+    let home = tempfile::tempdir().unwrap();
+
+    app_install::linux::install(home.path(), Path::new("/usr/bin/goghmode")).unwrap();
+
+    let applications = home.path().join(".local").join("share").join("applications");
+    let icons = home.path().join(".local").join("share").join("icons");
+    for path in files_under(home.path()) {
+        assert!(
+            path.starts_with(&applications) || path.starts_with(&icons),
+            "installer wrote outside the standard directories: {}",
+            path.display()
+        );
+    }
+    assert!(!home
+        .path()
+        .join(".local")
+        .join("share")
+        .join("omarchy")
+        .exists());
+}
+
+#[test]
+fn linux_install_is_repeatable() {
+    let home = tempfile::tempdir().unwrap();
+
+    app_install::linux::install(home.path(), Path::new("/usr/bin/goghmode")).unwrap();
+    let entry_path =
+        app_install::linux::install(home.path(), Path::new("/opt/goghmode/goghmode")).unwrap();
+
+    let entry = fs::read_to_string(&entry_path).unwrap();
+    assert!(entry.contains("Exec=\"/opt/goghmode/goghmode\""));
+    assert!(!entry.contains("/usr/bin/goghmode"));
+}
 
 #[test]
 fn installer_only_codesigns_macho_binaries() {

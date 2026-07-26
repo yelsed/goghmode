@@ -20,8 +20,8 @@ const MAX_SAVE_BODY_BYTES: usize = 4 * 1024 * 1024;
 /// rather than widening it would brick every installed companion build.
 const SUPPORTED_SCHEMA_VERSIONS: [u8; 2] = [1, 2];
 
-/// Lets a companion ask what this Mac understands instead of inferring it from
-/// a rejection. An older Mac has no such route and answers 404, which is itself
+/// Lets a companion ask what this host understands instead of inferring it
+/// from a rejection. An older host has no such route and answers 404, which is
 /// a usable answer.
 const CAPABILITIES: &[u8] = br#"{"schemaVersions":[1,2],"features":["pages"]}"#;
 
@@ -328,7 +328,7 @@ fn handle_save_request(stream: &mut TcpStream, drawings_dir: &Path, body: &[u8])
 fn validate_snapshot(snapshot: &DrawingSnapshot) -> Result<(), String> {
     if !SUPPORTED_SCHEMA_VERSIONS.contains(&snapshot.schema_version) {
         return Err(format!(
-            "unsupported schemaVersion {} (this Mac understands 1 and 2)",
+            "unsupported schemaVersion {} (this host understands 1 and 2)",
             snapshot.schema_version
         ));
     }

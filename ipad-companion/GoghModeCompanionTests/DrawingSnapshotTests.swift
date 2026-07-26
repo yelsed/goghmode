@@ -32,7 +32,7 @@ final class DrawingSnapshotTests: XCTestCase {
     }
 
     /// Rounding runs before clamping precisely so a value at the edge cannot be
-    /// rounded up past the canvas, which the Mac rejects with a 400.
+    /// rounded up past the canvas, which the host rejects with a 400.
     func testRoundingNeverPushesPointsOutsideTheCanvas() throws {
         let canvas = CGSize(width: 320, height: 240)
         let snapshot = DrawingSnapshot.fromPencilDrawing(
@@ -128,7 +128,7 @@ final class DrawingSnapshotTests: XCTestCase {
         XCTAssertEqual(page["title"] as? String, "Server sketch")
     }
 
-    func testDowngradedSnapshotDropsThePageForAMacThatPredatesThem() throws {
+    func testDowngradedSnapshotDropsThePageForAHostThatPredatesThem() throws {
         let snapshot = DrawingSnapshot.empty(
             canvasSize: CGSize(width: 320, height: 240),
             page: PageRef(id: "note-1", title: "Server sketch")
@@ -148,7 +148,7 @@ final class DrawingSnapshotTests: XCTestCase {
         let capabilities = try JSONDecoder().decode(GoghModeCapabilities.self, from: json)
 
         XCTAssertTrue(capabilities.supportsPages)
-        XCTAssertFalse(GoghModeCapabilities.pagelessMac.supportsPages)
+        XCTAssertFalse(GoghModeCapabilities.pagelessHost.supportsPages)
     }
 
     @MainActor
