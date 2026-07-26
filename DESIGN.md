@@ -126,7 +126,7 @@ SF carries everything, per platform convention. There is no brand face.
   and thirty sheets have to be scannable without scrolling a wall of thumbnails.
 - Columns are fixed-width and shared by the head row and every line, so numbers,
   dates and stamps read straight down their columns: `SHEET`, `NAME` (flexible),
-  `UPDATED`, `STROKES`, `CLAUDE`. `UPDATED` and `STROKES` drop out at compact width;
+  `UPDATED`, `STROKES`, `AGENT`. `UPDATED` and `STROKES` drop out at compact width;
   the rest never move.
 - The head row carries the column names in drafting lettering, under a full rule.
 - Line height is set by the 40×54 preview, so it never grows with content. Previews
@@ -156,7 +156,7 @@ content.
 - **Title block** — labelled cells: `SHEET` (mono number), `NAME`, `DATE`,
   `STROKES`. Used where a sheet is presented as an object rather than a line — the
   empty state's blank sheet.
-- **Stamp control** — the one control answering "which sheet does Claude read?".
+- **Stamp control** — the one control answering "which sheet does the agent read?".
   Unstamped it is a quiet ruled button reading `STAMP`; on the stamped sheet the
   control *is* the stamp, and pressing it lifts the stamp again. Exactly one stamp
   exists across the whole register.

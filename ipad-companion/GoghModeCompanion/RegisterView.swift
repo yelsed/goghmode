@@ -80,12 +80,12 @@ struct RegisterView: View {
         }
     }
 
-    /// The line that answers "what is Claude reading?" without opening anything,
+    /// The line that answers "what is the agent reading?" without opening anything,
     /// and the only place a failed upload or stamp can be seen from.
     private var registerHead: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                BlockLabel(text: "Claude reads")
+                BlockLabel(text: "Agent reads")
 
                 if let pinned = store.pinnedPage {
                     Text(pinned.title)
@@ -139,7 +139,7 @@ struct RegisterView: View {
             return message
         }
         if uploader.macIsKnown && !uploader.pinningSupported {
-            return "\(UploadController.macAppOutOfDate) Until then Claude reads whichever sheet you drew on last."
+            return "\(UploadController.macAppOutOfDate) Until then your agent reads whichever sheet you drew on last."
         }
         return nil
     }
@@ -241,7 +241,7 @@ struct RegisterView: View {
             store.rename(page.id, to: name)
             // The Mac keeps the title with the page, so a rename only reaches it on
             // the next save of that sheet. Send it now when it is the stamped one, so
-            // the register and the Mac never disagree about the name Claude reads.
+            // the register and the Mac never disagree about the name the agent reads.
             if page.id == store.pinnedPageID {
                 Task { _ = await uploader.promote(page.id, endpointText: endpointText) }
             }
@@ -315,7 +315,7 @@ struct RegisterHeader: View {
                 BlockLabel(text: "Updated").frame(width: columns.date, alignment: .leading)
                 BlockLabel(text: "Strokes").frame(width: columns.strokes, alignment: .leading)
             }
-            BlockLabel(text: "Claude").frame(width: columns.stamp, alignment: .leading)
+            BlockLabel(text: "Agent").frame(width: columns.stamp, alignment: .leading)
             Spacer().frame(width: columns.chevron)
         }
         .padding(.trailing, columns.trail)
@@ -381,7 +381,7 @@ struct SheetRow: View {
         .accessibilityLabel(
             Text(
                 isIssued
-                    ? "Sheet \(number), \(page.title), \(rendered.strokeCount) strokes. Stamped — this is what Claude reads."
+                    ? "Sheet \(number), \(page.title), \(rendered.strokeCount) strokes. Stamped — this is what your agent reads."
                     : "Sheet \(number), \(page.title), \(rendered.strokeCount) strokes"
             )
         )
@@ -495,7 +495,7 @@ struct RegisterLine<Columns: View, Trailing: View>: View {
     }
 }
 
-/// The one control that answers "which sheet does Claude read?". Unstamped it is a
+/// The one control that answers "which sheet does the agent read?". Unstamped it is a
 /// quiet ruled button reading `STAMP`; on the stamped sheet the control *is* the
 /// stamp, and pressing it lifts the stamp again.
 struct StampControl: View {
@@ -553,10 +553,10 @@ struct StampControl: View {
 
     private var spokenLabel: String {
         switch state {
-        case .issued: "Stamped for Claude. Press to lift the stamp."
+        case .issued: "Stamped for the agent. Press to lift the stamp."
         case .working: "Asking the Mac to move the stamp"
         case .unavailable: "Stamping needs GoghMode on the Mac updated"
-        case .available: "Stamp this sheet so Claude reads it"
+        case .available: "Stamp this sheet so your agent reads it"
         }
     }
 }

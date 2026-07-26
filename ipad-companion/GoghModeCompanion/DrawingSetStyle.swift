@@ -7,7 +7,7 @@
 // title blocks with labelled cells, SF Mono only for sheet numbers. One
 // saturated colour exists: rubber-stamp red, spent solely on the issue stamp.
 // STORY: every page I drew is here and named, and I can see from across the desk
-// which one Claude is reading — because I stamped it.
+// which one the agent is reading — because I stamped it.
 // FIRST VIEWPORT: large title "Pages", a mono status line naming the issued
 // sheet, then a grid of white sheets each carrying its title block. Exactly one
 // wears a rotated stamp.
@@ -211,6 +211,6 @@ struct IssueStamp: View {
             }
             .opacity(0.88)
             .rotationEffect(.degrees(-3.5))
-            .accessibilityLabel(Text("\(text). This is the page Claude reads."))
+            .accessibilityLabel(Text("\(text). This is the page your agent reads."))
     }
 }

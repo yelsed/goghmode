@@ -146,7 +146,7 @@ final class UploadController: ObservableObject {
         pinningSupported = true
     }
 
-    /// Stamps a page as the one Claude reads, or clears the stamp with `nil`.
+    /// Stamps a page as the one the agent reads, or clears the stamp with `nil`.
     /// Returns whether the Mac accepted it, so the caller records the pin only
     /// when it is actually true on disk.
     func pin(_ pageID: String?, endpointText: String) async -> Bool {

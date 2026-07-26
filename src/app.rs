@@ -275,7 +275,7 @@ impl GoghModeApp {
                                 .color(Color32::from_rgb(245, 247, 250)),
                         );
                         ui.label(
-                            RichText::new("Local sketchpad for Claude")
+                            RichText::new("Local sketchpad for your agent")
                                 .size(13.0)
                                 .color(Color32::from_rgb(165, 176, 192)),
                         );
@@ -312,7 +312,7 @@ impl GoghModeApp {
 
                         ui.separator();
 
-                        if primary_button(ui, "Send to Claude").clicked() {
+                        if primary_button(ui, "Send to agent").clicked() {
                             self.copy_prompt();
                         }
                         if ui.button("Copy image").clicked() {

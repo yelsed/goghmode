@@ -224,7 +224,7 @@ struct CanvasView: View {
         store.rename(pageID, to: name)
         // The Mac keeps the title with the page, so a rename only reaches it on the
         // next save. Send it now, so the register and the Mac never disagree about
-        // the name Claude is reading.
+        // the name the agent is reading.
         uploadCurrentSheet()
     }
 
@@ -300,7 +300,7 @@ struct SetupView: View {
                     Text("GoghMode")
                         .font(.largeTitle.weight(.bold))
                         .foregroundStyle(Sheet.onGround)
-                    Text("Write here. The Mac keeps every sheet, and Claude reads the one you stamp.")
+                    Text("Write here. The Mac keeps every sheet, and your agent reads the one you stamp.")
                         .font(.callout)
                         .foregroundStyle(Sheet.onGroundSecondary)
                         .fixedSize(horizontal: false, vertical: true)
