@@ -3,6 +3,8 @@ import Foundation
 struct GoghModeEndpoint: Equatable {
     let saveURL: URL
     let capabilitiesURL: URL
+    let pinURL: URL
+    let promoteURL: URL
 
     init?(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -27,17 +29,22 @@ struct GoghModeEndpoint: Equatable {
         }
 
         let root = path
-        components.percentEncodedPath = root + "save"
-        guard let save = components.url else {
-            return nil
+        func route(_ name: String) -> URL? {
+            components.percentEncodedPath = root + name
+            return components.url
         }
-        components.percentEncodedPath = root + "capabilities"
-        guard let capabilities = components.url else {
+
+        guard let save = route("save"),
+              let capabilities = route("capabilities"),
+              let pin = route("pin"),
+              let promote = route("promote") else {
             return nil
         }
 
         saveURL = save
         capabilitiesURL = capabilities
+        pinURL = pin
+        promoteURL = promote
     }
 }
 
@@ -55,6 +62,12 @@ struct GoghModeCapabilities: Codable, Equatable {
     var supportsPages: Bool {
         schemaVersions.contains(currentSchemaVersion)
     }
+
+    /// A Mac that knows about pages but not pinning still works; the stamp is
+    /// simply not offered rather than silently doing nothing.
+    var supportsPinning: Bool {
+        features.contains("pin") && features.contains("promote")
+    }
 }
 
 struct GoghModeClient {
@@ -71,6 +84,35 @@ struct GoghModeClient {
             return .pagelessMac
         }
         return capabilities
+    }
+
+    /// Stamps a page as the one `latest.*` follows, or clears the stamp with
+    /// `nil`. The Mac owns this state; the app asks and then records the answer.
+    func pin(_ pageID: String?, on endpoint: GoghModeEndpoint) async throws {
+        try await postPageID(pageID, to: endpoint.pinURL)
+    }
+
+    /// Sends one page now without moving the stamp.
+    func promote(_ pageID: String, on endpoint: GoghModeEndpoint) async throws {
+        try await postPageID(pageID, to: endpoint.promoteURL)
+    }
+
+    private func postPageID(_ pageID: String?, to url: URL) async throws {
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["pageId": pageID])
+
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw UploadError.invalidResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            // The Mac names what was wrong in the body; passing it through beats
+            // inventing a generic message on top of a specific one.
+            let reason = String(data: data, encoding: .utf8) ?? ""
+            throw UploadError.rejected(reason.isEmpty ? "The Mac rejected it." : reason)
+        }
     }
 
     func upload(_ snapshot: DrawingSnapshot, to endpoint: GoghModeEndpoint) async throws {
@@ -94,6 +136,7 @@ enum UploadError: Error, Equatable, LocalizedError {
     case invalidEndpoint
     case invalidResponse
     case serverStatus(Int)
+    case rejected(String)
 
     var errorDescription: String? {
         switch self {
@@ -103,6 +146,8 @@ enum UploadError: Error, Equatable, LocalizedError {
             "The Mac did not send a valid response."
         case .serverStatus(let status):
             "The Mac rejected the drawing with status \(status)."
+        case .rejected(let reason):
+            reason
         }
     }
 }

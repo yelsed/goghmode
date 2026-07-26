@@ -7,13 +7,25 @@ use arboard::{Clipboard, ImageData};
 use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke as EguiStroke, TextureHandle, Vec2};
 
 use crate::drawing::{Drawing, Stroke};
-use crate::export::{snapshot_to_rgba, write_snapshot};
+use crate::export::snapshot_to_rgba;
 use crate::mobile_server::{MobileServer, DEFAULT_PORT};
-use crate::pages::{list_pages, load_page_snapshot, pages_dir, write_page, PageEntry};
+use crate::pages::{
+    list_pages, pages_dir, promote_page, read_pin, set_pin, write_page, PageEntry,
+};
 use crate::prompt::{prompt_text, PromptTarget};
 
 const THUMBNAIL_WIDTH: u32 = 240;
 const THUMBNAIL_HEIGHT: u32 = 160;
+
+/// The Drawing Set world, as the desktop can render it. Kept in step with
+/// DESIGN.md and the iPad's `Sheet` tokens — the two surfaces are one set.
+const GROUND: Color32 = Color32::from_rgb(237, 234, 228);
+const PAPER: Color32 = Color32::from_rgb(255, 255, 255);
+const SHEET_EDGE: Color32 = Color32::from_rgb(216, 212, 204);
+const RULE: Color32 = Color32::from_rgb(168, 162, 154);
+const INK: Color32 = Color32::from_rgb(26, 25, 23);
+const INK_LABEL: Color32 = Color32::from_rgb(107, 102, 94);
+const STAMP: Color32 = Color32::from_rgb(180, 51, 31);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum View {
@@ -28,6 +40,7 @@ pub struct GoghModeApp {
     status: String,
     view: View,
     pages: Vec<PageEntry>,
+    pinned_page_id: Option<String>,
     thumbnails: HashMap<String, TextureHandle>,
 }
 
@@ -48,6 +61,7 @@ impl GoghModeApp {
         Self {
             drawing: Drawing::new(1024.0, 640.0),
             pages: list_pages(&drawings_dir),
+            pinned_page_id: read_pin(&drawings_dir),
             drawings_dir,
             mobile_server,
             status,
@@ -71,17 +85,45 @@ impl GoghModeApp {
 
     fn refresh_pages(&mut self) {
         self.pages = list_pages(&self.drawings_dir);
+        self.pinned_page_id = read_pin(&self.drawings_dir);
     }
 
-    fn promote_page(&mut self, page_id: &str) {
-        let promoted = load_page_snapshot(&self.drawings_dir, page_id)
-            .and_then(|snapshot| write_snapshot(&snapshot, &self.drawings_dir).map(|_| ()));
-        self.status = match promoted {
+    fn page_title(&self, page_id: &str) -> String {
+        self.pages
+            .iter()
+            .find(|page| page.page_id == page_id)
+            .and_then(|page| page.title.clone())
+            .unwrap_or_else(|| page_id.to_owned())
+    }
+
+    /// Sends one sheet now without moving the stamp.
+    fn send_page(&mut self, page_id: &str) {
+        self.status = match promote_page(&self.drawings_dir, page_id) {
             // Only latest.* moves. The page keeps its own files and its place in
-            // the list, so promoting is not an edit.
-            Ok(()) => format!("Pointed drawings/latest.* at page {page_id}"),
-            Err(error) => format!("Could not open page {page_id}: {error}"),
+            // the register, so sending is not an edit.
+            Ok(_) => format!("Sent {} to drawings/latest.*", self.page_title(page_id)),
+            Err(error) => format!("Could not send that sheet: {error}"),
         };
+    }
+
+    /// Stamps a sheet as the one the agent reads, or lifts the stamp.
+    fn stamp_page(&mut self, page_id: Option<&str>) {
+        match set_pin(&self.drawings_dir, page_id) {
+            Ok(()) => {
+                self.pinned_page_id = page_id.map(str::to_owned);
+                self.status = match page_id {
+                    Some(page_id) => format!(
+                        "Stamped {} — /goghmode reads it until you stamp another",
+                        self.page_title(page_id)
+                    ),
+                    None => {
+                        "Stamp lifted. latest.* follows whichever sheet is drawn on next".to_owned()
+                    }
+                };
+            }
+            Err(error) => self.status = format!("Could not stamp that sheet: {error}"),
+        }
+        self.refresh_pages();
     }
 
     fn reveal_drawings_dir(&mut self) {
@@ -202,7 +244,14 @@ impl eframe::App for GoghModeApp {
         ui.add_space(10.0);
         match self.view {
             View::Canvas => self.draw_canvas(ui),
-            View::Pages => self.draw_page_browser(ui),
+            View::Pages => {
+                // The register is paper on a paper-coloured ground, so sheets
+                // read as objects lying on it rather than panels in a dark app.
+                egui::Frame::new()
+                    .fill(GROUND)
+                    .inner_margin(egui::Margin::same(12))
+                    .show(ui, |ui| self.draw_page_browser(ui));
+            }
         }
         ui.add_space(8.0);
         StatusBar::show(ui, &self.status);
@@ -320,20 +369,8 @@ impl GoghModeApp {
     }
 
     fn draw_page_browser(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            if ui.button("Refresh").clicked() {
-                self.refresh_pages();
-            }
-            if ui.button("Reveal drawings folder").clicked() {
-                self.reveal_drawings_dir();
-            }
-            ui.label(
-                RichText::new("Click a page to point drawings/latest.* at it")
-                    .size(12.0)
-                    .color(Color32::from_rgb(150, 162, 178)),
-            );
-        });
-        ui.add_space(8.0);
+        self.draw_register_head(ui);
+        ui.add_space(10.0);
 
         if self.pages.is_empty() {
             self.draw_empty_page_browser(ui);
@@ -341,18 +378,30 @@ impl GoghModeApp {
         }
 
         let pages = self.pages.clone();
+        let pinned = self.pinned_page_id.clone();
         let columns = ((ui.available_width() / (THUMBNAIL_WIDTH as f32 + 24.0)).floor() as usize)
             .clamp(1, 6);
-        let mut promoting = None;
+        let mut stamping = None;
+        let mut sending = None;
 
         egui::ScrollArea::vertical().show(ui, |ui| {
             egui::Grid::new("pages")
-                .spacing(Vec2::new(16.0, 16.0))
+                .spacing(Vec2::new(20.0, 20.0))
                 .show(ui, |ui| {
                     for (index, page) in pages.iter().enumerate() {
                         let thumbnail = self.thumbnail_for(ui.ctx(), page);
-                        if draw_page_card(ui, page, thumbnail).clicked() {
-                            promoting = Some(page.page_id.clone());
+                        let issued = pinned.as_deref() == Some(page.page_id.as_str());
+                        let action = draw_sheet_card(ui, page, thumbnail, issued, index + 1);
+                        match action {
+                            SheetAction::Stamp => {
+                                stamping = Some(if issued {
+                                    None
+                                } else {
+                                    Some(page.page_id.clone())
+                                })
+                            }
+                            SheetAction::Send => sending = Some(page.page_id.clone()),
+                            SheetAction::None => {}
                         }
                         if (index + 1) % columns == 0 {
                             ui.end_row();
@@ -361,9 +410,52 @@ impl GoghModeApp {
                 });
         });
 
-        if let Some(page_id) = promoting {
-            self.promote_page(&page_id);
+        if let Some(target) = stamping {
+            self.stamp_page(target.as_deref());
         }
+        if let Some(page_id) = sending {
+            self.send_page(&page_id);
+        }
+    }
+
+    /// The register head: the one line saying which sheet the agent reads.
+    fn draw_register_head(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("CLAUDE READS")
+                    .size(10.0)
+                    .strong()
+                    .color(INK_LABEL),
+            );
+            match self.pinned_page_id.clone() {
+                Some(page_id) => {
+                    ui.label(
+                        RichText::new(self.page_title(&page_id))
+                            .size(13.0)
+                            .strong()
+                            .color(INK),
+                    );
+                    if ui.button("Lift stamp").clicked() {
+                        self.stamp_page(None);
+                    }
+                }
+                None => {
+                    ui.label(
+                        RichText::new("whichever sheet was drawn on last")
+                            .size(13.0)
+                            .color(INK_LABEL),
+                    );
+                }
+            }
+
+            ui.separator();
+            if ui.button("Refresh").clicked() {
+                self.refresh_pages();
+            }
+            if ui.button("Reveal drawings folder").clicked() {
+                self.reveal_drawings_dir();
+            }
+        });
     }
 
     fn draw_empty_page_browser(&mut self, ui: &mut egui::Ui) {
@@ -449,55 +541,108 @@ impl GoghModeApp {
     }
 }
 
-fn draw_page_card(
+enum SheetAction {
+    None,
+    Stamp,
+    Send,
+}
+
+/// A sheet in the register: the drawing, then a ruled title block. Elevation is
+/// declared once as a hairline edge — paper on paper does not glow.
+fn draw_sheet_card(
     ui: &mut egui::Ui,
     page: &PageEntry,
     thumbnail: Option<TextureHandle>,
-) -> egui::Response {
+    issued: bool,
+    number: usize,
+) -> SheetAction {
     let card_width = THUMBNAIL_WIDTH as f32;
-    ui.allocate_ui(Vec2::new(card_width, THUMBNAIL_HEIGHT as f32 + 52.0), |ui| {
+    let mut action = SheetAction::None;
+
+    ui.allocate_ui(Vec2::new(card_width, THUMBNAIL_HEIGHT as f32 + 96.0), |ui| {
         egui::Frame::new()
-            .fill(Color32::from_rgb(18, 24, 34))
-            .stroke(EguiStroke::new(1.0, Color32::from_rgb(42, 53, 68)))
-            .corner_radius(egui::CornerRadius::same(12))
-            .inner_margin(egui::Margin::same(8))
+            .fill(PAPER)
+            .stroke(EguiStroke::new(
+                1.0,
+                if issued { STAMP } else { SHEET_EDGE },
+            ))
+            .corner_radius(egui::CornerRadius::same(2))
+            .inner_margin(egui::Margin::same(0))
             .show(ui, |ui| {
                 ui.vertical(|ui| {
+                    let image_size = Vec2::new(card_width, THUMBNAIL_HEIGHT as f32);
                     match thumbnail {
                         Some(handle) => {
-                            ui.add(
-                                egui::Image::new(&handle)
-                                    .fit_to_exact_size(Vec2::new(
-                                        card_width - 16.0,
-                                        THUMBNAIL_HEIGHT as f32,
-                                    ))
-                                    .corner_radius(egui::CornerRadius::same(8)),
-                            );
+                            ui.add(egui::Image::new(&handle).fit_to_exact_size(image_size));
                         }
                         None => {
-                            ui.allocate_space(Vec2::new(card_width - 16.0, THUMBNAIL_HEIGHT as f32));
+                            ui.allocate_space(image_size);
                         }
                     }
-                    ui.label(
-                        RichText::new(page.title.as_deref().unwrap_or(&page.page_id))
-                            .size(13.0)
-                            .strong()
-                            .color(Color32::from_rgb(235, 239, 245)),
-                    );
-                    ui.label(
-                        RichText::new(format!(
-                            "{} · {} strokes",
-                            relative_time(page.updated_at),
-                            page.stroke_count
-                        ))
-                        .size(11.0)
-                        .color(Color32::from_rgb(150, 162, 178)),
-                    );
+
+                    // Top rule of the title block.
+                    let (rule, painter) =
+                        ui.allocate_painter(Vec2::new(card_width, 1.0), Sense::hover());
+                    painter.rect_filled(rule.rect, 0.0, RULE);
+
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(10.0);
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new("SHEET").size(9.0).strong().color(INK_LABEL));
+                            ui.label(
+                                RichText::new(format!("{number:02}"))
+                                    .size(12.0)
+                                    .monospace()
+                                    .color(INK),
+                            );
+                        });
+                        ui.add_space(10.0);
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new("NAME").size(9.0).strong().color(INK_LABEL));
+                            ui.label(
+                                RichText::new(page.title.as_deref().unwrap_or(&page.page_id))
+                                    .size(13.0)
+                                    .strong()
+                                    .color(INK),
+                            );
+                        });
+                    });
+
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(10.0);
+                        ui.label(
+                            RichText::new(format!(
+                                "{} · {} strokes",
+                                relative_time(page.updated_at),
+                                page.stroke_count
+                            ))
+                            .size(11.0)
+                            .color(INK_LABEL),
+                        );
+                    });
+
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(10.0);
+                        let stamp_label = if issued { "Lift stamp" } else { "Stamp" };
+                        if ui.button(stamp_label).clicked() {
+                            action = SheetAction::Stamp;
+                        }
+                        if ui.button("Send now").clicked() {
+                            action = SheetAction::Send;
+                        }
+                        if issued {
+                            ui.label(RichText::new("ISSUED").size(11.0).strong().color(STAMP));
+                        }
+                    });
+                    ui.add_space(8.0);
                 });
             });
-    })
-    .response
-    .interact(Sense::click())
+    });
+
+    action
 }
 
 fn relative_time(updated_at_ms: u128) -> String {

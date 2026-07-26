@@ -32,6 +32,10 @@ final class UploadController: ObservableObject {
     /// itself rather than pretending a page switch means anything there.
     @Published private(set) var pagesSupported = true
 
+    /// False on a Mac that understands pages but not the stamp routes. The stamp
+    /// is withheld rather than shown doing nothing.
+    @Published private(set) var pinningSupported = true
+
     private let client: GoghModeClient
     private var pendingUpload: Task<Void, Never>?
     private var lastSnapshot: DrawingSnapshot?
@@ -116,7 +120,44 @@ final class UploadController: ObservableObject {
         let capabilities = await client.capabilities(of: endpoint)
         capabilitiesByEndpoint[endpointText] = capabilities
         pagesSupported = capabilities.supportsPages
+        pinningSupported = capabilities.supportsPinning
         return capabilities
+    }
+
+    /// Stamps a page as the one Claude reads, or clears the stamp with `nil`.
+    /// Returns whether the Mac accepted it, so the caller records the pin only
+    /// when it is actually true on disk.
+    func pin(_ pageID: String?, endpointText: String) async -> Bool {
+        guard let endpoint = GoghModeEndpoint(endpointText) else {
+            status = .failed(UploadError.invalidEndpoint.errorDescription ?? "")
+            return false
+        }
+
+        do {
+            _ = await resolvedCapabilities(for: endpoint, endpointText: endpointText, client: client)
+            try await client.pin(pageID, on: endpoint)
+            return true
+        } catch {
+            status = .failed(guidance(for: error))
+            return false
+        }
+    }
+
+    /// Sends one page now without moving the stamp.
+    func promote(_ pageID: String, endpointText: String) async -> Bool {
+        guard let endpoint = GoghModeEndpoint(endpointText) else {
+            status = .failed(UploadError.invalidEndpoint.errorDescription ?? "")
+            return false
+        }
+
+        do {
+            try await client.promote(pageID, on: endpoint)
+            status = .saved(Date())
+            return true
+        } catch {
+            status = .failed(guidance(for: error))
+            return false
+        }
     }
 
     private func upload(_ snapshot: DrawingSnapshot, endpointText: String, client: GoghModeClient) async throws {

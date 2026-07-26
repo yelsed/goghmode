@@ -152,20 +152,99 @@ final class DrawingSnapshotTests: XCTestCase {
     }
 
     @MainActor
-    func testPageStoreKeepsPagesAcrossReloadsNewestFirst() throws {
+    func testPageStoreKeepsPagesAndSeriesAcrossReloads() throws {
         let storeURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("goghmode-pages-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: storeURL) }
 
         let store = PageStore(storeURL: storeURL)
-        let firstPageID = store.selectedPageID
-        let secondPage = store.addPage()
-        store.updateSelectedPage(with: PKDrawing())
+        let first = store.selectedPageID
+        let second = store.addPage()
+        store.rename(second.id, to: "Server sketch")
+        store.stack(first, onto: second.id)
 
         let reloaded = PageStore(storeURL: storeURL)
 
         XCTAssertEqual(reloaded.pages.count, 2)
-        XCTAssertEqual(reloaded.pages.first?.id, secondPage.id)
-        XCTAssertTrue(reloaded.pages.contains { $0.id == firstPageID })
+        XCTAssertEqual(reloaded.series.count, 1)
+        XCTAssertEqual(reloaded.pages.first { $0.id == second.id }?.title, "Server sketch")
+        XCTAssertTrue(reloaded.pages.allSatisfy { $0.seriesID != nil })
+    }
+
+    @MainActor
+    func testStackedSheetsNumberWithinTheirSeries() throws {
+        let store = PageStore(storeURL: temporaryStoreURL())
+        let first = store.selectedPageID
+        let second = store.addPage()
+        store.stack(first, onto: second.id)
+
+        guard let series = store.series.first else { return XCTFail("no series created") }
+        let filed = store.sheets(in: series.id)
+
+        XCTAssertEqual(filed.count, 2)
+        XCTAssertEqual(store.sheetNumber(for: filed[0]), "\(series.prefix)-01")
+        XCTAssertEqual(store.sheetNumber(for: filed[1]), "\(series.prefix)-02")
+    }
+
+    @MainActor
+    func testLooseSheetsAreNumberedInCreationOrder() throws {
+        let store = PageStore(storeURL: temporaryStoreURL())
+        let first = store.pages[0]
+        let second = store.addPage()
+
+        XCTAssertEqual(store.sheetNumber(for: first), "01")
+        XCTAssertEqual(store.sheetNumber(for: second), "02")
+    }
+
+    @MainActor
+    func testTakingASheetOutOfASeriesDiscardsTheEmptySeries() throws {
+        let store = PageStore(storeURL: temporaryStoreURL())
+        let first = store.selectedPageID
+        let second = store.addPage()
+        store.stack(first, onto: second.id)
+
+        store.removeFromSeries(first)
+        store.removeFromSeries(second.id)
+
+        XCTAssertTrue(store.series.isEmpty)
+        XCTAssertTrue(store.pages.allSatisfy { $0.seriesID == nil })
+    }
+
+    @MainActor
+    func testTheStampIsRecordedOnlyFromWhatTheMacConfirmed() throws {
+        let storeURL = temporaryStoreURL()
+        let store = PageStore(storeURL: storeURL)
+        let page = store.pages[0]
+
+        XCTAssertNil(store.pinnedPageID)
+        store.recordPin(page.id)
+
+        XCTAssertEqual(PageStore(storeURL: storeURL).pinnedPageID, page.id)
+    }
+
+    @MainActor
+    func testCapabilitiesDistinguishAMacWithoutTheStampRoutes() throws {
+        let pagesOnly = Data(#"{"schemaVersions":[1,2],"features":["pages"]}"#.utf8)
+        let full = Data(#"{"schemaVersions":[1,2],"features":["pages","pin","promote"]}"#.utf8)
+
+        let older = try JSONDecoder().decode(GoghModeCapabilities.self, from: pagesOnly)
+        let current = try JSONDecoder().decode(GoghModeCapabilities.self, from: full)
+
+        XCTAssertTrue(older.supportsPages)
+        XCTAssertFalse(older.supportsPinning)
+        XCTAssertTrue(current.supportsPinning)
+    }
+
+    func testEndpointExposesPinAndPromoteBesideSave() throws {
+        let endpoint = try XCTUnwrap(GoghModeEndpoint("http://192.168.1.10:8787/abc123/"))
+
+        XCTAssertEqual(endpoint.pinURL.absoluteString, "http://192.168.1.10:8787/abc123/pin")
+        XCTAssertEqual(endpoint.promoteURL.absoluteString, "http://192.168.1.10:8787/abc123/promote")
+    }
+
+    @MainActor
+    private func temporaryStoreURL() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("goghmode-pages-\(UUID().uuidString).json")
     }
 }

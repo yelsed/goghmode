@@ -8,9 +8,9 @@ struct ContentView: View {
     @StateObject private var pageStore = PageStore()
     @State private var drawing = PKDrawing()
     @State private var canvasSize = CGSize(width: 1024, height: 1366)
-    @State private var clearSignal = 0
+    @State private var reloadSignal = 0
     @State private var showingSettings = false
-    @State private var showingPages = false
+    @State private var showingRegister = false
 
     private var endpoint: GoghModeEndpoint? {
         GoghModeEndpoint(endpointText)
@@ -18,10 +18,14 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            Color.white.ignoresSafeArea()
+            Sheet.ground.ignoresSafeArea()
 
             if endpoint == nil || showingSettings {
-                setupView
+                SetupView(
+                    endpointText: $endpointText,
+                    isValid: endpoint != nil,
+                    onDone: { showingSettings = false }
+                )
             } else {
                 drawingView
             }
@@ -55,70 +59,39 @@ struct ContentView: View {
         uploader.uploadNow(snapshot: snapshot(of: drawing), endpointText: endpointText)
     }
 
-    private func switchTo(pageID: String) {
-        showingPages = false
+    private func open(pageID: String) {
         guard pageID != pageStore.selectedPageID else { return }
 
-        // The outgoing page goes up before the canvas swaps, so switching away
+        // The outgoing sheet goes up before the canvas swaps, so switching away
         // never leaves an edit behind.
         pageStore.updateSelectedPage(with: drawing)
         uploadCurrentPage()
 
         pageStore.select(pageID)
         drawing = pageStore.selectedDrawing
-        clearSignal += 1
+        reloadSignal += 1
     }
 
     private func addPage() {
-        showingPages = false
         pageStore.updateSelectedPage(with: drawing)
         uploadCurrentPage()
 
         pageStore.addPage()
         drawing = PKDrawing()
-        clearSignal += 1
+        reloadSignal += 1
     }
 
-    private var setupView: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            Spacer()
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("GoghMode Companion")
-                    .font(.largeTitle.bold())
-                Text("Paste the Mac mobile URL from GoghMode. The app will send your PencilKit drawing to the Mac as `drawings/latest.*`.")
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Mac URL")
-                    .font(.headline)
-                TextField("http://192.168.1.10:8787/token/", text: $endpointText)
-                    .keyboardType(.URL)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .textFieldStyle(.roundedBorder)
-                if !endpointText.isEmpty && endpoint == nil {
-                    Text("Use the full mobile URL from the Mac app. It must start with http:// or https://.")
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                }
-            }
-
-            Button {
-                showingSettings = false
-            } label: {
-                Text(endpoint == nil ? "Waiting for valid URL" : "Open notebook")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(endpoint == nil)
-
-            Spacer()
-        }
-        .padding(32)
-        .frame(maxWidth: 640)
+    private func clearSheet() {
+        drawing = PKDrawing()
+        reloadSignal += 1
+        pageStore.updateSelectedPage(with: drawing)
+        uploader.uploadNow(
+            snapshot: DrawingSnapshot.empty(
+                canvasSize: canvasSize,
+                page: pageStore.selectedPage?.pageRef
+            ),
+            endpointText: endpointText
+        )
     }
 
     private var drawingView: some View {
@@ -127,175 +100,217 @@ struct ContentView: View {
 
             if let message = uploader.pagesUnsupportedMessage {
                 Text(message)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Sheet.onGround)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 16)
-                    .padding(.bottom, 8)
-                    .background(.regularMaterial)
+                    .padding(.bottom, 10)
+                    .background(Sheet.ground)
             }
 
             GeometryReader { geometry in
-                PencilCanvasView(drawing: $drawing, reloadSignal: $clearSignal) { newDrawing, newCanvasSize in
+                PencilCanvasView(drawing: $drawing, reloadSignal: $reloadSignal) { newDrawing, newCanvasSize in
                     canvasSize = newCanvasSize == .zero ? geometry.size : newCanvasSize
                     pageStore.updateSelectedPage(with: newDrawing)
                     uploader.schedule(snapshot: snapshot(of: newDrawing), endpointText: endpointText)
                 }
                 .ignoresSafeArea(edges: .bottom)
-                .onAppear {
-                    canvasSize = geometry.size
-                }
+                .onAppear { canvasSize = geometry.size }
             }
         }
-        .sheet(isPresented: $showingPages) {
-            pageOverview
-        }
-    }
-
-    private var toolbar: some View {
-        HStack(spacing: 12) {
-            statusBadge
-
-            if uploader.pagesSupported {
-                Button {
-                    showingPages = true
-                } label: {
-                    Label(
-                        pageStore.selectedPage?.title ?? "Pages",
-                        systemImage: "square.stack"
-                    )
-                    .lineLimit(1)
-                }
-                .buttonStyle(.bordered)
-
-                Button {
-                    addPage()
-                } label: {
-                    Label("New page", systemImage: "plus")
-                }
-                .buttonStyle(.bordered)
-            }
-
-            Spacer()
-
-            Button("Save Now") {
-                uploadCurrentPage()
-            }
-            .buttonStyle(.borderedProminent)
-
-            Button("Clear") {
-                drawing = PKDrawing()
-                clearSignal += 1
-                pageStore.updateSelectedPage(with: drawing)
-                uploader.uploadNow(
-                    snapshot: DrawingSnapshot.empty(
-                        canvasSize: canvasSize,
-                        page: pageStore.selectedPage?.pageRef
-                    ),
-                    endpointText: endpointText
-                )
-            }
-            .buttonStyle(.bordered)
-
-            Button("Settings") {
-                showingSettings = true
-            }
-            .buttonStyle(.bordered)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(.regularMaterial)
-    }
-
-    private var pageOverview: some View {
-        NavigationStack {
-            List(pageStore.pages) { page in
-                Button {
-                    switchTo(pageID: page.id)
-                } label: {
-                    HStack(spacing: 12) {
-                        thumbnail(for: page)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(page.title)
-                                .font(.body.weight(.medium))
-                            Text("\(page.drawing.strokes.count) strokes")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        if page.id == pageStore.selectedPageID {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(.tint)
-                        }
-                    }
-                }
-                .buttonStyle(.plain)
-            }
-            .navigationTitle("Pages")
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button("New page") {
-                        addPage()
-                    }
-                }
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") {
-                        showingPages = false
-                    }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func thumbnail(for page: NotebookPage) -> some View {
-        let bounds = CGRect(origin: .zero, size: CGSize(width: 160, height: 110))
-        Image(uiImage: page.drawing.image(from: bounds, scale: 1))
-            .resizable()
-            .aspectRatio(contentMode: .fit)
-            .frame(width: 80, height: 55)
-            .background(Color.white)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color.secondary.opacity(0.3))
+        .sheet(isPresented: $showingRegister) {
+            RegisterView(
+                store: pageStore,
+                uploader: uploader,
+                endpointText: endpointText,
+                onOpen: { open(pageID: $0) }
             )
+        }
     }
 
-    private var statusBadge: some View {
-        Button {
-            uploader.retry()
-        } label: {
-            HStack(spacing: 8) {
+    /// The canvas header reads like the top rule of a sheet: which sheet this is,
+    /// and whether it is the stamped one.
+    private var toolbar: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                StatusBadge(status: uploader.status, canRetry: uploader.canRetry) {
+                    uploader.retry()
+                }
+
+                if uploader.pagesSupported {
+                    Button {
+                        pageStore.updateSelectedPage(with: drawing)
+                        showingRegister = true
+                    } label: {
+                        HStack(spacing: 8) {
+                            if let page = pageStore.selectedPage {
+                                SheetNumber(text: pageStore.sheetNumber(for: page))
+                                Text(page.title)
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundStyle(Sheet.onGround)
+                                    .lineLimit(1)
+                            }
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(Sheet.onGroundSecondary)
+                        }
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Text("Open the register"))
+
+                    if pageStore.selectedPageID == pageStore.pinnedPageID {
+                        IssueStamp(scale: 0.72)
+                    }
+                }
+
+                Spacer(minLength: 0)
+
+                if uploader.pagesSupported {
+                    toolbarButton("New sheet", systemImage: "plus", action: addPage)
+                }
+                toolbarButton("Clear", systemImage: "eraser", action: clearSheet)
+                toolbarButton("Settings", systemImage: "gearshape") { showingSettings = true }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 4)
+
+            Rectangle().fill(Sheet.rule).frame(height: Sheet.hair)
+        }
+        .background(Sheet.ground)
+    }
+
+    private func toolbarButton(
+        _ title: String,
+        systemImage: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 16, weight: .semibold))
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Sheet.onGround)
+        .accessibilityLabel(Text(title))
+    }
+}
+
+/// Connection state as a stamped chip. The old version paired a coloured dot with
+/// grey caption text; the label carries the state here so colour is not the only
+/// thing saying it.
+struct StatusBadge: View {
+    let status: UploadController.Status
+    let canRetry: Bool
+    let onRetry: () -> Void
+
+    var body: some View {
+        Button(action: onRetry) {
+            HStack(spacing: 7) {
                 Circle()
-                    .fill(statusColor)
-                    .frame(width: 10, height: 10)
-                Text(uploader.status.label)
-                    .font(.subheadline.weight(.semibold))
-                if case .failed(let message) = uploader.status {
+                    .fill(tint)
+                    .frame(width: 8, height: 8)
+                Text(status.label.uppercased())
+                    .font(.system(size: 10, weight: .semibold))
+                    .tracking(0.8)
+                    .foregroundStyle(Sheet.onGround)
+                if case .failed(let message) = status {
                     Text(message)
-                        .font(.caption)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Sheet.onGroundSecondary)
                         .lineLimit(1)
-                        .foregroundStyle(.secondary)
                 }
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(.thinMaterial, in: Capsule())
+            .frame(height: 44)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(!uploader.canRetry)
+        .disabled(!canRetry)
     }
 
-    private var statusColor: Color {
-        switch uploader.status {
-        case .idle, .saved:
-            .green
-        case .waiting, .saving:
-            .orange
-        case .failed:
-            .red
+    private var tint: Color {
+        switch status {
+        case .idle, .saved: Sheet.review
+        case .waiting, .saving: Sheet.inkLabel
+        case .failed: Sheet.stamp
         }
+    }
+}
+
+/// Pairing. Rebuilt because the old screen put `.secondary` grey on a white
+/// ground, which is unreadable at a desk: every string here is full-weight ink,
+/// and the address sits on paper so it reads as a field to fill in.
+struct SetupView: View {
+    @Binding var endpointText: String
+    let isValid: Bool
+    let onDone: () -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("GoghMode")
+                        .font(.system(size: 34, weight: .bold))
+                        .foregroundStyle(Sheet.onGround)
+                    Text("Write here. The Mac keeps every sheet, and Claude reads the one you stamp.")
+                        .font(.system(size: 16))
+                        .foregroundStyle(Sheet.onGroundSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.bottom, 28)
+
+                VStack(spacing: 0) {
+                    Rectangle().fill(Sheet.rule).frame(height: Sheet.hair)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        BlockLabel(text: "Mac address")
+                        TextField("http://192.168.1.10:8787/token/", text: $endpointText)
+                            .font(.system(size: 16, design: .monospaced))
+                            .foregroundStyle(Sheet.ink)
+                            .keyboardType(.URL)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .frame(minHeight: 44)
+
+                        if !endpointText.isEmpty && !isValid {
+                            Text("That is not a full address. Copy the mobile URL from the Mac — it starts with http:// and ends in a token.")
+                                .font(.system(size: 13))
+                                .foregroundStyle(Sheet.stamp)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding(14)
+                }
+                .background(Sheet.paper)
+                .overlay {
+                    Rectangle().strokeBorder(Sheet.edge, lineWidth: Sheet.hair)
+                }
+
+                Text("Open GoghMode on the Mac and press Copy mobile URL.")
+                    .font(.system(size: 14))
+                    .foregroundStyle(Sheet.onGroundSecondary)
+                    .padding(.top, 12)
+
+                Button(action: onDone) {
+                    Text(isValid ? "Open the notebook" : "Waiting for an address")
+                        .font(.system(size: 16, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 50)
+                        .background(isValid ? Sheet.ink : Sheet.edge)
+                        .foregroundStyle(isValid ? Sheet.paper : Sheet.onGround)
+                        .clipShape(RoundedRectangle(cornerRadius: Sheet.controlRadius))
+                }
+                .disabled(!isValid)
+                .padding(.top, 28)
+            }
+            .padding(Sheet.margin)
+            .frame(maxWidth: 640, alignment: .leading)
+            .frame(maxWidth: .infinity)
+        }
+        .background(Sheet.ground)
     }
 }
 
