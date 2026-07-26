@@ -15,11 +15,13 @@ host. The companion then keeps a list of saved hosts, shows which one it is talk
 and sends each drawing to exactly one of them.
 
 Concretely: a host generates a random `hostId` on first launch and keeps it forever. Pairing is a
-short-lived, single-use code shown on the host as a QR code, scanned by the companion. The host
-displays "iPad of Desley wants to pair" and waits for a tap before it hands back a per-device
-secret. From then on every upload carries an HMAC-SHA256 over its own body, a timestamp, and a
-nonce, and every response carries an HMAC back — so the companion can tell that it reached the
-machine it paired with, and not merely *a* machine answering on that address today.
+short-lived, single-use secret shown on the host as a QR code and scanned by the companion. The host
+displays "iPad of Desley wants to pair" and waits for a tap. **The device secret is then derived
+from the scanned value on both sides and is never transmitted** — a full recording of the pairing
+exchange gives an attacker nothing. From then on every upload carries an HMAC-SHA256 over its own
+body, a timestamp, and a nonce, and every response carries an HMAC back — so the companion can tell
+that it reached the machine it paired with, and not merely *a* machine answering on that address
+today.
 
 This is the smallest design that satisfies the stated requirements. It uses one standard primitive,
 HMAC-SHA256, with a pre-shared key. There is no public-key infrastructure, no certificate, no
@@ -150,6 +152,7 @@ One correction to the existing documentation while in the area: the **Known fail
 | Another device on the same network | Can reach the port; can scan; can sniff unencrypted traffic | Needs only the path, which sniffing hands over. Full write access. | Cannot forge an upload without a per-device secret that never travels after pairing. |
 | A guest-network peer | Same, plus no accountability | Same as above | Same as above. |
 | Someone who screenshots or shoulder-surfs the URL | Reads the credential off a screen | Permanent write access; nothing can be revoked short of rotating for everyone | A pairing code is single-use and expires in about two minutes, and using it still requires someone tapping approve on the host. |
+| **An active attacker during pairing** | Answers on the host's address, or reads and rewrites every packet of the pairing exchange | Nothing to attack; there is no pairing step | Learns nothing. The secret is derived from a value that went screen-to-camera and was never sent. Cannot forge the pairing signature, so no approval sheet even appears. |
 | A stale URL after an address or port change | Passive; the user's own mistake | Silently posts to whatever machine now holds that address | The host identity does not match the saved profile, so the companion refuses and says so. |
 | A rogue host impersonating GoghMode | Answers on an address the companion has saved | Indistinguishable from the real host | Cannot produce a valid response HMAC, so the companion never reports success. |
 | A compromised companion device | Holds real secrets | Holds the shared token — equivalent to every device | Holds one device's secret. Revoke that device; every other device is unaffected. |
@@ -270,8 +273,19 @@ different machine is here now" if identity is the thing that moved.
 
 ### Pairing
 
-1. The user opens **Pair a device** on the host. The host generates a single-use pairing code of 16
-   random bytes with a lifetime of roughly 120 seconds, and shows it as a QR code and as text for
+**The secret is never transmitted.** This is the single most important property of the flow. The QR
+code carries a high-entropy value that travels from a screen to a camera and never touches the
+network; both sides derive the long-lived device secret from it independently. An attacker who can
+read, modify, or answer every packet during pairing — a rogue access point, an address-resolution
+spoof, a machine that has taken over the host's address — still learns nothing, because the only
+thing that would have been worth capturing was never sent.
+
+An earlier draft of this plan had the host return the device secret in the pairing response. That
+would have put the root of trust for the entire system in one cleartext message, which is precisely
+the attacker the rest of the design defends against. It is fixed here.
+
+1. The user opens **Pair a device** on the host. The host generates a single-use `pairingSecret` of
+   16 random bytes with a lifetime of roughly 120 seconds, and shows it as a QR code and as text for
    manual entry.
 2. The QR payload is compact JSON:
 
@@ -282,23 +296,51 @@ different machine is here now" if identity is the thing that moved.
      "name": "Desley's MacBook",
      "platform": "macos",
      "addresses": ["192.168.1.10:8787", "10.13.0.4:8787"],
-     "pairingCode": "b71e…"
+     "pairingSecret": "b71e…"
    }
    ```
 
    Every candidate local address is listed, not just the one `preferred_lan_ip()` guesses, so a
    companion on a different interface can still reach the host.
-3. The companion generates its own `deviceId` and posts to `POST /v2/pair` with `hostId`,
-   `deviceId`, a human-readable device name, its platform, and the pairing code.
-4. **The host asks a person.** A sheet appears naming the device and its address; nothing is granted
-   until someone taps approve. Denial and timeout are both answered with the same response, so a
-   caller cannot use the difference to probe.
-5. On approval the host burns the pairing code and returns `deviceToken`, a 32-byte `deviceSecret`,
-   the `hostId`, the host display name, and the platform. The companion stores the secret in the
-   Keychain, non-syncing, and saves the rest as a host profile.
+3. The companion generates its own `deviceId` and derives, without contacting anything:
 
-A leaked pairing code is close to harmless: it is single-use, it expires in about two minutes, and
-using it requires a human at the host to approve a device they can see named on screen.
+   ```
+   deviceSecret = HMAC-SHA256(pairingSecret, "goghmode-device-v1" ‖ deviceId)
+   ```
+
+   Using HMAC as a key-derivation function is sound here because the input key is a single uniformly
+   random 128-bit value. The label pins the derivation to one purpose and one version.
+4. It posts `POST /v2/pair` with `hostId`, `deviceId`, a device name, its platform, and
+
+   ```
+   X-GoghMode-Pair-Mac: HMAC-SHA256(pairingSecret, "pair" ‖ hostId ‖ deviceId ‖ deviceName)
+   ```
+
+   The host recomputes it. A caller that never saw the QR cannot produce it, so a request that fails
+   this check never reaches a human — it is answered `403` and dropped, and no approval sheet
+   appears. This also means the approval dialog cannot be used as a nuisance channel by anything on
+   the network.
+5. **The host asks a person.** A sheet appears naming the device and its address; nothing is granted
+   until someone taps approve. The device name is attacker-supplied text, so it is length-limited
+   and stripped of control characters before it is displayed.
+6. On approval the host derives the same `deviceSecret` with the same formula, stores it in the
+   device registry, burns the `pairingSecret`, and replies with the `hostId`, the host display name,
+   the platform, and
+
+   ```
+   X-GoghMode-Pair-Mac: HMAC-SHA256(pairingSecret, "paired" ‖ hostId ‖ deviceId)
+   ```
+
+   The companion verifies that before saving anything. It proves the machine that answered holds the
+   value from the screen the user was looking at — so pairing authenticates the host as well as the
+   device, in the same exchange, at no extra cost.
+7. Denial, expiry, a reused secret, and a wrong message authentication code are all answered `403`
+   with an identical body, so a caller cannot tell them apart.
+
+A leaked pairing secret is close to harmless: single-use, roughly two minutes, and using it still
+requires a human at the host to approve a device they can see named on screen. A leaked *screenshot*
+of the QR is the one case worth naming — it is a real credential for those two minutes, which is why
+the lifetime is short and the approval is mandatory.
 
 ### Device registry
 
@@ -314,11 +356,14 @@ write-temporary-then-rename pattern the exporter already uses:
       "platform": "ipados",
       "secret": "…",
       "pairedAt": 1785000000000,
-      "lastSeenAt": 1785000600000
+      "lastSeenAt": 1785000600000,
+      "lastAcceptedTimestamp": 1785000600000
     }
   ]
 }
 ```
+
+`lastAcceptedTimestamp` is what makes replay protection survive a restart — see below.
 
 The desktop shows this as a device list with last-seen times. Revoking is removing the entry, and it
 takes effect on the next request. No expiry, no renewal, no refresh flow — a device stays paired
@@ -338,14 +383,27 @@ until a person removes it, which is what someone actually expects of their own t
 Fields are joined with a separator that cannot appear inside any of them, so no two distinct field
 sets can produce the same signed string.
 
-The host verifies, in this order, and answers a **single generic `401`** for every authentication
-failure so that a caller learns nothing from which check failed:
+The host verifies in this exact order, and answers a **single generic `401`** for every
+authentication failure so that a caller learns nothing from which check failed:
 
 1. `deviceId` is a known, unrevoked device.
 2. The timestamp is within ±120 seconds of the host clock.
-3. The nonce has not been seen inside that window — a bounded set, capped and evicted oldest-first,
-   so memory cannot be grown by an attacker.
+3. **The timestamp is strictly greater than that device's `lastAcceptedTimestamp`.**
 4. The message authentication code matches, compared in constant time.
+5. Only now is the body handed to `serde_json`.
+
+**Order matters and step 5 is the point.** Hashing a body is cheap and parsing it is not. If parsing
+came first, an unauthenticated caller could make the host parse 4 MiB of adversarial JSON on every
+request — authentication that runs after the expensive work protects nothing. The body is read under
+the existing 4 MiB cap, digested, and checked before anything interprets it.
+
+**Why a persisted monotonic timestamp rather than a set of seen nonces.** A nonce set lives in
+memory, so restarting the host empties it and a request captured moments earlier can be replayed
+into the fresh process. It is also a collection an attacker can grow. Requiring each device's
+timestamp to strictly increase needs one number, is persisted in a registry that is written anyway,
+and closes the restart window completely. The companion's uploads are already serialised — a single
+in-flight request at a time — so strict monotonicity costs nothing in practice. The nonce stays in
+the signed string because the *response* proof below binds to it.
 
 Including `hostId` in the signed string is what stops a captured request from being replayed against
 a *different* host. Including the body digest is what stops the drawing from being swapped for
@@ -371,6 +429,27 @@ It costs one extra header and one hash, and it converts an unnoticeable wrong-ma
 unmissable error. Binding it to the client's nonce is what makes it a live proof rather than a value
 that could be replayed from an earlier exchange.
 
+### What `/v2/hello` says, and to whom
+
+An **unauthenticated** caller gets protocol facts only:
+
+```json
+{"v": 1, "schemaVersions": [1, 2], "features": ["pages", "pairing-v2"], "time": 1785000600000}
+```
+
+No `hostId`, no display name. A stable identifier handed to anyone who can reach the port is a
+tracking value for a laptop that joins many networks, and nothing needs it before pairing — during
+pairing the identity arrives in the QR code, and afterwards it is already saved.
+
+A **signed** request to the same route additionally returns `hostId`, the display name, and the
+platform, so a paired companion can confirm identity and refresh a changed display name.
+
+`time` is deliberately public. A host whose clock is wrong rejects every upload, and because
+authentication failures are opaque by design that would otherwise be undiagnosable. With this, the
+companion compares clocks and says "this host's clock is 4 minutes behind" instead of showing a
+generic failure that looks like a bug. Revealing a clock aids no attack the local network does not
+already permit.
+
 ### Primitives and storage
 
 - **HMAC-SHA256 only.** On the host, the RustCrypto `hmac` and `sha2` crates — widely reviewed, no
@@ -393,7 +472,7 @@ that could be replayed from an earlier exchange.
 | Any authentication failure | `401`, generic body, no detail about which check failed |
 | Device known but revoked | `401`, identical to the above |
 | Valid signature, invalid snapshot | `400` with the named reason, exactly as today |
-| Pairing code wrong, expired, used, or denied | `403`, identical in all four cases |
+| Pairing secret wrong, expired, reused, unsigned, or denied | `403`, identical in all five cases |
 | Write failure | `500` |
 
 Authentication failures are deliberately opaque; validation failures are deliberately specific. The
@@ -557,9 +636,16 @@ Additive throughout. Every stage leaves the previous one working.
 | Stage | Host | iPad companion | Browser companion | Existing users |
 | --- | --- | --- | --- | --- |
 | **1 · Identity** | Generates `hostId`; adds `/v2/hello`; advertises `features: ["pages", "pairing-v2"]` | Unchanged | Unchanged | Nothing changes |
-| **2 · Pairing available** | `/v2/pair` and `/v2/save` live; `/{token}/save` behaves exactly as today | Ships pairing; prefers version 2 when advertised, falls back to the token URL when not | Unchanged | Nothing changes until they pair |
-| **3 · Legacy opt-out** | A setting: "stop accepting uploads on the old URL", off by default | Unchanged | Breaks **only** if that setting is turned on | Opt-in, reversible |
-| **4 · Legacy off by default** | The setting defaults on, one release later, with an explicit notice | Unchanged | Needs the URL scheme decision revisited | Announced in advance |
+| **2 · Pairing available** | `/v2/pair` and `/v2/save` live; `/{token}/save` behaves exactly as today **while no device is paired** | Ships pairing; prefers version 2 when advertised, falls back to the token URL when not | Unchanged | Nothing changes until they pair |
+| **3 · First pairing closes the old door** | The first successful pairing **turns the legacy route off**, with a visible notice and a toggle to re-enable it | Unchanged | Stops working on that host once a device is paired, unless the toggle is used | Their choice, reversible, and announced at the moment it happens |
+| **4 · Legacy retired** | The toggle is removed once the browser companion's future is decided | Unchanged | Needs the URL scheme decision resolved first | Announced in advance |
+
+**Why stage 3 is not merely an opt-out.** An earlier draft left the unauthenticated route on by
+default until the very end. That is a bypass: everything the pairing work buys is worthless while a
+second door accepts anonymous uploads to the same drawings directory, and "no unauthenticated local
+server" is a stated hard requirement. Tying the change to the first successful pairing is what makes
+the security real without stranding anyone — nothing changes for a user who has not adopted the new
+flow, and the moment they do, the old door closes and they are told so.
 
 - **Existing browser URLs** keep working through stage 3 and are the reason stage 4 needs its own
   decision — the browser companion has no pairing path by design.
@@ -607,14 +693,14 @@ tests re-include source files with `#[path = "../src/x.rs"] mod x;`. A new modul
 - **Goal.** A host knows who it is and which devices it has ever trusted. Nothing authenticates yet.
 - **Files.** New `src/host_identity.rs` and `src/devices.rs`; `src/mobile_server.rs` gains
   `/v2/hello`; `src/app.rs` gains a host-name field and a device list.
-- **API.** `GET /v2/hello` → `{hostId, name, platform, schemaVersions, features}`. `/capabilities`
-  advertises `pairing-v2`.
+- **API.** `GET /v2/hello` → `{v, schemaVersions, features, time}` unauthenticated; `hostId`, name and
+  platform are added only for a signed request. `/capabilities` advertises `pairing-v2`.
 - **Security.** Both files created `0600`; refuse to start pairing if the random source is
   unavailable; the display name is user-controlled text and must be length-limited before it enters
   a response.
 - **Tests.** Identity persists across restarts; permissions are `0600`; a corrupt identity file is
   regenerated rather than crashing; the registry survives a partial write via the existing
-  temporary-then-rename pattern.
+  temporary-then-rename pattern; an unauthenticated `/v2/hello` response contains no `hostId`.
 - **Exit.** Two hosts on one network report different identities; `latest.*` behaviour is
   bit-for-bit unchanged.
 
@@ -624,13 +710,21 @@ tests re-include source files with `#[path = "../src/x.rs"] mod x;`. A new modul
 - **Files.** New `src/pairing.rs`; server route; desktop pairing sheet, QR rendering, device list;
   Swift `HostStore`, Keychain storage, QR scanner, manual-code entry.
 - **API.** `POST /v2/pair`.
-- **Security.** Single-use code, ~120-second lifetime, constant-time comparison, human approval
-  mandatory, identical response for denied and expired and wrong and reused. Rate-limit attempts.
-- **Tests.** Code expires; code cannot be reused; denial and expiry are indistinguishable on the
-  wire; a revoked device disappears from the registry; concurrent pairing attempts do not both
-  succeed on one code.
-- **Exit.** An iPad pairs with two hosts, both appear in its host list, and revoking one on its host
-  leaves the other untouched.
+- **Security.** The device secret is **derived, never transmitted**. The pair request is signed under
+  the pairing secret, so an unsigned or wrongly signed request is dropped before any approval sheet
+  is shown. Single-use, ~120-second lifetime, constant-time comparison, human approval mandatory,
+  identical `403` for denied, expired, reused, unsigned, and wrong. The device name is
+  length-limited and stripped of control characters before display. Rate-limit attempts. **The first
+  successful pairing disables the legacy route** and says so.
+- **Tests.** The pairing secret never appears in any response body or header. A pair request with no
+  signature, or one signed with the wrong secret, is refused **without** raising an approval prompt.
+  The secret expires; it cannot be reused; denial and expiry are indistinguishable on the wire;
+  concurrent attempts do not both succeed on one secret; host and companion derive byte-identical
+  device secrets; a revoked device disappears from the registry; the legacy route stops accepting
+  uploads after the first pairing and resumes if the toggle is used.
+- **Exit.** An iPad pairs with two hosts, both appear in its host list, revoking one leaves the
+  other untouched, and a packet capture of the entire pairing exchange contains nothing that lets a
+  third party upload afterwards.
 
 ### Phase 3 — Authenticated upload
 
@@ -638,14 +732,17 @@ tests re-include source files with `#[path = "../src/x.rs"] mod x;`. A new modul
 - **Files.** `src/mobile_server.rs` (`/v2/save`, verification, nonce set), Swift request signing and
   response verification.
 - **API.** `POST /v2/save` with the four headers; every response carries `X-GoghMode-Host-Mac`.
-- **Security.** The whole point of the plan. Constant-time comparison; bounded nonce set; ±120-second
-  clock skew; generic `401`; `validate_snapshot` still runs afterward, unchanged.
+- **Security.** The whole point of the plan. Constant-time comparison; per-device strictly increasing
+  timestamps persisted in the registry; ±120-second clock skew; generic `401`; **the body is
+  digested and verified before `serde_json` ever sees it**; `validate_snapshot` still runs
+  afterward, unchanged.
 - **Tests.** A correct request succeeds. Wrong secret, wrong device, revoked device, absent headers,
-  a timestamp outside the window, a reused nonce, a body altered after signing, and a signature
-  captured from another host all fail with an identical `401`. A tampered or absent host response
-  message authentication code is surfaced by the companion as an identity error, not a success. The
-  existing multi-packet upload regression in `tests/mobile_server.rs` still passes against the new
-  route.
+  a timestamp outside the window, a **replayed timestamp**, a body altered after signing, and a
+  signature captured from another host all fail with an identical `401`. A request captured and
+  replayed **after the host restarts** still fails. A malformed body under an invalid signature is
+  rejected without being parsed. A tampered or absent host response message authentication code is
+  surfaced by the companion as an identity error, not a success. The existing multi-packet upload
+  regression in `tests/mobile_server.rs` still passes against the new route.
 - **Exit.** `curl` cannot post a drawing without a secret; a captured valid request replayed a minute
   later is refused; the legacy token route still works exactly as before.
 
@@ -723,8 +820,17 @@ These genuinely need a human answer; everything else above is decided.
 - [ ] A captured valid upload replayed after the window is refused.
 - [ ] A captured valid upload replayed against a *different* host is refused.
 - [ ] Every authentication failure returns an identical, uninformative `401`.
-- [ ] A pairing code cannot be used twice, cannot be used after expiry, and cannot be used without a
-      person approving on the host.
+- [ ] **A full packet capture of a pairing exchange yields nothing that allows a later upload.** The
+      device secret is derived on both sides and never appears on the network.
+- [ ] A pair request that is unsigned or wrongly signed is refused **without** showing an approval
+      prompt.
+- [ ] A pairing secret cannot be used twice, cannot be used after expiry, and cannot be used without
+      a person approving on the host.
+- [ ] A request captured and replayed after the host restarts is still refused.
+- [ ] An invalid signature means the body is never parsed.
+- [ ] An unauthenticated `/v2/hello` reveals no persistent host identifier.
+- [ ] Once a device is paired, the legacy unauthenticated route stops accepting uploads unless it is
+      deliberately re-enabled.
 - [ ] Revoking one device takes effect on its next request and disturbs no other device.
 - [ ] `~/.goghmode/host-id` and `~/.goghmode/devices.json` are mode `0600`.
 - [ ] The companion refuses to report success when the host response message authentication code is

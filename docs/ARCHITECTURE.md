@@ -210,8 +210,7 @@ Documented rather than fixed. Each is a live item in [PLANNING.md](PLANNING.md).
 
 | Behaviour | Effect |
 | --- | --- |
-| Port 8787 taken → silent fallback to an ephemeral port | The token is stable, so a stale iPad URL still *looks* right while pointing at a dead port. Presents as an `Offline` badge no retry can fix. |
-| PNG export ignores `stroke.color` | Raster output is always ink `#111827`, while SVG and JSON honour the colour. iPad colour choices show up in the SVG only. |
+| Port 8787 taken → fallback to an ephemeral port | The token is stable, so a stale iPad URL still *looks* right while pointing at a dead port. No longer silent on the desktop: `port_warning()` (`src/app.rs:62`) is rendered in the toolbar. The tablet still sees only an `Offline` badge. |
 | SVG background is hardcoded `#ffffff` | The web app's cream paper tone (`rgb(250, 249, 244)`) is dropped on export. |
 | Mobile service worker caches the app shell forever | A change to `mobile/index.html` does not reach an installed progressive web app until the cache name `goghmode-mobile-v1` is bumped. |
 
