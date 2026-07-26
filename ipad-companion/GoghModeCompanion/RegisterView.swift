@@ -139,7 +139,7 @@ struct RegisterView: View {
             return message
         }
         if uploader.macIsKnown && !uploader.pinningSupported {
-            return "\(UploadController.stampNeedsANewerMac) Until then Claude reads whichever sheet you drew on last."
+            return "\(UploadController.macAppOutOfDate) Until then Claude reads whichever sheet you drew on last."
         }
         return nil
     }
@@ -555,7 +555,7 @@ struct StampControl: View {
         switch state {
         case .issued: "Stamped for Claude. Press to lift the stamp."
         case .working: "Asking the Mac to move the stamp"
-        case .unavailable: "Stamping needs a newer Mac app"
+        case .unavailable: "Stamping needs GoghMode on the Mac updated"
         case .available: "Stamp this sheet so Claude reads it"
         }
     }

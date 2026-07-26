@@ -49,7 +49,7 @@ final class UploadController: ObservableObject {
     var pagesUnsupportedMessage: String? {
         pagesSupported
             ? nil
-            : "This Mac runs an older GoghMode, so pages are off. Update the Mac app."
+            : "GoghMode on the Mac is an older version, so pages are off. Update it there and reopen it."
     }
 
     var canRetry: Bool {
@@ -162,7 +162,7 @@ final class UploadController: ObservableObject {
                 client: client
             )
             guard capabilities.supportsPinning else {
-                status = .failed(UploadController.stampNeedsANewerMac)
+                status = .failed(UploadController.macAppOutOfDate)
                 return false
             }
             try await client.pin(pageID, on: endpoint)
@@ -173,8 +173,10 @@ final class UploadController: ObservableObject {
         }
     }
 
-    static let stampNeedsANewerMac =
-        "This Mac is too old to stamp a sheet. Update the Mac app."
+    /// Names the app, not the machine. The first version said "this Mac is too old",
+    /// which reads as a verdict on the hardware for something a reopen fixes.
+    static let macAppOutOfDate =
+        "GoghMode on the Mac is an older version that cannot stamp sheets yet. Update it there and reopen it."
 
     /// Sends one page now without moving the stamp.
     func promote(_ pageID: String, endpointText: String) async -> Bool {
@@ -190,7 +192,7 @@ final class UploadController: ObservableObject {
                 client: client
             )
             guard capabilities.supportsPinning else {
-                status = .failed(UploadController.stampNeedsANewerMac)
+                status = .failed(UploadController.macAppOutOfDate)
                 return false
             }
             try await client.promote(pageID, on: endpoint)
