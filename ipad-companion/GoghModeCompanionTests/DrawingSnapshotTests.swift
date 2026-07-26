@@ -309,9 +309,58 @@ final class DrawingSnapshotTests: XCTestCase {
         }
     }
 
+    /// A Mac that cannot stamp is a fact about the Mac, not a failed upload. Recording
+    /// it as `.failed` made the message stick: nothing clears a failure until an
+    /// upload succeeds, so "the Mac app is an older version" stayed on screen long
+    /// after the Mac had been updated.
+    @MainActor
+    func testAnOutOfDateMacDoesNotLeaveAStickyUploadFailure() async {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [PagelessMacProtocol.self]
+        let controller = UploadController(
+            client: GoghModeClient(session: URLSession(configuration: configuration))
+        )
+
+        let accepted = await controller.pin("note-1", endpointText: "http://10.0.0.1:8787/abc123/")
+
+        XCTAssertFalse(accepted)
+        XCTAssertFalse(controller.pinningSupported)
+        XCTAssertTrue(controller.macIsKnown)
+        if case .failed(let message) = controller.status {
+            XCTFail("a capability verdict must not read as an upload failure: \(message)")
+        }
+    }
+
     @MainActor
     private func temporaryStoreURL() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("goghmode-pages-\(UUID().uuidString).json")
     }
+}
+
+/// A Mac that knows about pages but has no stamp routes. No mutable state, so it is
+/// safe to hand to a URLSession from any test.
+final class PagelessMacProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let url = request.url,
+              let response = HTTPURLResponse(
+                  url: url,
+                  statusCode: 200,
+                  httpVersion: nil,
+                  headerFields: ["Content-Type": "application/json"]
+              ) else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(#"{"schemaVersions":[1,2],"features":["pages"]}"#.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }

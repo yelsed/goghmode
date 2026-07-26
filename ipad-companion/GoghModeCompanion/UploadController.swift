@@ -162,7 +162,12 @@ final class UploadController: ObservableObject {
                 client: client
             )
             guard capabilities.supportsPinning else {
-                status = .failed(UploadController.macAppOutOfDate)
+                // Deliberately not a `.failed` status. A capability verdict is not an
+                // upload failure, and nothing clears a failure until an upload
+                // succeeds — so setting one here left "the Mac app is an older
+                // version" on screen long after the Mac had been updated. The
+                // register reads the capabilities directly and says so for exactly as
+                // long as it is true.
                 return false
             }
             try await client.pin(pageID, on: endpoint)
@@ -192,7 +197,12 @@ final class UploadController: ObservableObject {
                 client: client
             )
             guard capabilities.supportsPinning else {
-                status = .failed(UploadController.macAppOutOfDate)
+                // Deliberately not a `.failed` status. A capability verdict is not an
+                // upload failure, and nothing clears a failure until an upload
+                // succeeds — so setting one here left "the Mac app is an older
+                // version" on screen long after the Mac had been updated. The
+                // register reads the capabilities directly and says so for exactly as
+                // long as it is true.
                 return false
             }
             try await client.promote(pageID, on: endpoint)
