@@ -79,7 +79,7 @@ both exist to get a device talking to this host.
 | Situation | Behaviour |
 | --- | --- |
 | 8787 is free | Bind it. Run normally. |
-| 8787 answers as GoghMode | An instance is already running. Best-effort bring its window forward, then exit `0`. No second window, no second server, the saved connection is untouched. |
+| 8787 answers as GoghMode | An instance is already running. Say which port it holds and exit `0`. No second window, no second server, the saved connection is untouched. |
 | 8787 is held by something else | Run without a server and say so plainly, naming the port. |
 
 **Detection.** Binding *is* the lock — no lock file, no PID staleness, nothing to leave behind after
@@ -90,10 +90,15 @@ holds it: a body advertising the `pairing-v2` feature is one of ours.
 it reads as foreign. It resolves itself the first time both processes are the current build, and the
 message names the port either way.
 
-**Focusing the existing window** is `osascript -e 'tell application "GoghMode" to activate'`, run
-best-effort and ignored on failure. The bundle launcher starts the binary detached with `env -i`, so
-it is not reliably addressable as an application — exiting cleanly is the guarantee, raising the
-window is the courtesy.
+**Focusing the existing window: do not.** This was specified as a courtesy —
+`osascript -e 'tell application "GoghMode" to activate'`, best-effort — and it is a spawn loop.
+`activate` goes through LaunchServices, which runs the bundle's launcher, which `nohup`s another
+`goghmode-bin`. That instance finds the port taken, tries the same courtesy, and launches another.
+Measured on the first run: **thirty-four processes inside ten seconds.**
+
+A second launch therefore prints which port the running instance holds and exits. Raising the window
+is not worth a fork bomb, and no non-launching alternative is worth the fragility either. A source
+test now asserts nothing in `main.rs` relaunches the application by name.
 
 ## Theme
 

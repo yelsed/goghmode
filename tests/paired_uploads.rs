@@ -4,7 +4,6 @@
 #[allow(dead_code)]
 #[path = "../src/crypto.rs"]
 mod crypto;
-#[allow(dead_code)]
 #[path = "../src/drawing.rs"]
 mod drawing;
 #[allow(dead_code)]

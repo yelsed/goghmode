@@ -1,20 +1,15 @@
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use arboard::{Clipboard, ImageData};
-use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke as EguiStroke, TextureHandle, Vec2};
+use arboard::Clipboard;
+use egui::{Color32, RichText, Sense, Stroke as EguiStroke, TextureHandle, Vec2};
 
-use crate::drawing::{Drawing, Stroke};
-use crate::export::snapshot_to_rgba;
 use crate::host::{Host, PairingPayload, PairingState};
-use crate::mobile_server::{MobileServer, DEFAULT_PORT};
+use crate::mobile_server::MobileServer;
 use crate::pages::{
-    list_pages, pages_dir, promote_page, read_pin, set_pin, sheet_numbers, write_page, PageEntry,
+    list_pages, pages_dir, promote_page, read_pin, set_pin, sheet_numbers, PageEntry,
 };
-use crate::prompt::{prompt_text, PromptTarget};
 
 const THUMBNAIL_WIDTH: u32 = 240;
 const THUMBNAIL_HEIGHT: u32 = 160;
@@ -27,27 +22,70 @@ const FILE_MANAGER_COMMAND: &str = if cfg!(target_os = "macos") {
     "xdg-open"
 };
 
-/// The Drawing Set world, as the desktop can render it. Kept in step with
-/// DESIGN.md and the iPad's `Sheet` tokens — the two surfaces are one set.
-const GROUND: Color32 = Color32::from_rgb(237, 234, 228);
-const PAPER: Color32 = Color32::from_rgb(255, 255, 255);
-const SHEET_EDGE: Color32 = Color32::from_rgb(216, 212, 204);
-const RULE: Color32 = Color32::from_rgb(168, 162, 154);
-const INK: Color32 = Color32::from_rgb(26, 25, 23);
-const INK_LABEL: Color32 = Color32::from_rgb(107, 102, 94);
-const STAMP: Color32 = Color32::from_rgb(180, 51, 31);
+/// The Drawing Set world, as the desktop renders it. Kept in step with
+/// DESIGN.md and the iPad's `Sheet` tokens — the two surfaces are one set, so
+/// neither may carry a colour the other does not know about.
+///
+/// Resolved per call rather than held as constants because the window follows
+/// the system appearance: paper in the light, and DESIGN.md's dark pairs
+/// otherwise. A register that stays bright white inside a dark desktop is the
+/// same "looks like two apps" problem in the other direction.
+struct Sheet {
+    ground: Color32,
+    paper: Color32,
+    edge: Color32,
+    rule: Color32,
+    ink: Color32,
+    ink_label: Color32,
+    stamp: Color32,
+}
+
+const LIGHT: Sheet = Sheet {
+    ground: Color32::from_rgb(237, 234, 228),
+    paper: Color32::from_rgb(255, 255, 255),
+    edge: Color32::from_rgb(216, 212, 204),
+    rule: Color32::from_rgb(168, 162, 154),
+    ink: Color32::from_rgb(26, 25, 23),
+    ink_label: Color32::from_rgb(107, 102, 94),
+    stamp: Color32::from_rgb(180, 51, 31),
+};
+
+const DARK: Sheet = Sheet {
+    ground: Color32::from_rgb(14, 13, 12),
+    paper: Color32::from_rgb(28, 27, 25),
+    edge: Color32::from_rgb(58, 55, 51),
+    rule: Color32::from_rgb(90, 86, 80),
+    ink: Color32::from_rgb(242, 239, 233),
+    ink_label: Color32::from_rgb(142, 136, 128),
+    // The stamp is the one colour that does not change. It is the mark, and a
+    // mark that shifts with the appearance is not a mark.
+    stamp: Color32::from_rgb(180, 51, 31),
+};
+
+fn sheet(ui: &egui::Ui) -> &'static Sheet {
+    if ui.ctx().theme() == egui::Theme::Dark {
+        &DARK
+    } else {
+        &LIGHT
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum View {
-    Canvas,
-    Pages,
+    Register,
     Devices,
 }
 
+/// The desktop's one job. Either it is serving devices, or it can say exactly
+/// why it is not — there is no third state where it half works.
+pub enum Bridge {
+    Serving(MobileServer),
+    Unavailable(String),
+}
+
 pub struct GoghModeApp {
-    drawing: Drawing,
     drawings_dir: PathBuf,
-    mobile_server: Option<MobileServer>,
+    bridge: Bridge,
     status: String,
     view: View,
     pages: Vec<PageEntry>,
@@ -61,27 +99,24 @@ pub struct GoghModeApp {
 }
 
 impl GoghModeApp {
-    pub fn new(drawings_dir: PathBuf, host: Host, goghmode_dir: PathBuf) -> Self {
-        let mobile_server = MobileServer::start(&drawings_dir, Arc::clone(&host)).ok();
-        let status = match mobile_server.as_ref() {
-            Some(server) => format!(
-                "Draw, then Copy image, Copy prompt, or use /goghmode. Mobile: {}",
-                server.url()
-            ),
-            None => {
-                "Draw, then Copy image, Copy prompt, or use /goghmode. Mobile server unavailable."
-                    .to_owned()
-            }
+    pub fn new(
+        drawings_dir: PathBuf,
+        host: Host,
+        goghmode_dir: PathBuf,
+        bridge: Bridge,
+    ) -> Self {
+        let status = match &bridge {
+            Bridge::Serving(_) => "Draw on a paired device. The stamped sheet is what /goghmode reads.".to_owned(),
+            Bridge::Unavailable(reason) => reason.clone(),
         };
 
         Self {
-            drawing: Drawing::new(1024.0, 640.0),
             pages: list_pages(&drawings_dir),
             pinned_page_id: read_pin(&drawings_dir),
             drawings_dir,
-            mobile_server,
+            bridge,
             status,
-            view: View::Canvas,
+            view: View::Register,
             thumbnails: HashMap::new(),
             host_name_draft: host.identity().display_name,
             host,
@@ -91,17 +126,11 @@ impl GoghModeApp {
         }
     }
 
-    /// Only the port the server actually bound tells the truth: `start` falls
-    /// back to a random one when 8787 is taken, and a URL copied before that
-    /// happened keeps looking correct while pointing nowhere.
-    fn port_warning(&self) -> Option<String> {
-        let server = self.mobile_server.as_ref()?;
-        (server.port() != DEFAULT_PORT).then(|| {
-            format!(
-                "Port {DEFAULT_PORT} was taken, so this session is on {}. Re-copy the mobile URL — an older one points at nothing.",
-                server.port()
-            )
-        })
+    fn server(&self) -> Option<&MobileServer> {
+        match &self.bridge {
+            Bridge::Serving(server) => Some(server),
+            Bridge::Unavailable(_) => None,
+        }
     }
 
     fn refresh_pages(&mut self) {
@@ -186,223 +215,111 @@ impl GoghModeApp {
         Some(handle)
     }
 
-    pub fn save(&mut self) -> anyhow::Result<()> {
-        self.save_with_status("Saved drawings/latest.svg")
-    }
-
-    pub fn copy_prompt(&mut self) {
-        match Clipboard::new()
-            .and_then(|mut clipboard| clipboard.set_text(prompt_text(PromptTarget::Generic)))
-        {
-            Ok(()) => self.status = "Copied AI prompt to clipboard".to_owned(),
-            Err(_) => {
-                self.status =
-                    "Clipboard unavailable; use Print prompt or goghmode prompt".to_owned()
-            }
-        }
-    }
-
-    pub fn copy_image(&mut self) {
-        let image = snapshot_to_rgba(&self.drawing.snapshot());
-        let width = image.width() as usize;
-        let height = image.height() as usize;
-        let bytes = image.into_raw();
-        let data = ImageData {
-            width,
-            height,
-            bytes: Cow::Owned(bytes),
-        };
-
-        match Clipboard::new().and_then(|mut clipboard| clipboard.set_image(data)) {
-            Ok(()) => self.status = "Copied drawing image to clipboard".to_owned(),
-            Err(_) => {
-                self.status = "Image clipboard unavailable; use Copy prompt or /goghmode".to_owned()
-            }
-        }
-    }
-
-    pub fn copy_mobile_url(&mut self) {
-        let Some(server) = &self.mobile_server else {
-            self.status = "Mobile server unavailable".to_owned();
-            return;
-        };
-
-        match Clipboard::new().and_then(|mut clipboard| clipboard.set_text(server.url())) {
-            Ok(()) => self.status = "Copied mobile URL to clipboard".to_owned(),
-            Err(_) => self.status = "Clipboard unavailable; type the Mobile URL".to_owned(),
-        }
-    }
-
-    pub fn print_prompt(&mut self) {
-        println!("{}", prompt_text(PromptTarget::Generic));
-        self.status = "Printed AI prompt to terminal".to_owned();
-    }
-
-    fn save_with_status(&mut self, success_status: &str) -> anyhow::Result<()> {
-        // Writes the desktop scratch page, not whichever page the iPad sent last.
-        let result = write_page(&self.drawing.snapshot(), &self.drawings_dir).map(|_| ());
-        match result {
-            Ok(()) => {
-                self.status = success_status.to_owned();
-                self.refresh_pages();
-                Ok(())
-            }
-            Err(error) => {
-                self.status = format!("Save failed: {error}");
-                Err(error)
-            }
-        }
-    }
-
-    fn save_after_undo(&mut self) {
-        let _ = self.save_with_status("Undid last stroke and saved drawings/latest.svg");
-    }
-
-    fn save_after_clear(&mut self) {
-        let _ = self.save_with_status("Cleared canvas and saved drawings/latest.svg");
-    }
 }
 
 impl eframe::App for GoghModeApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        configure_visuals(ui.ctx());
         ui.spacing_mut().item_spacing = Vec2::new(10.0, 10.0);
 
-        self.draw_toolbar(ui);
+        self.draw_header(ui);
         ui.add_space(10.0);
         match self.view {
-            View::Canvas => self.draw_canvas(ui),
-            View::Pages => {
-                // The register is paper on a paper-coloured ground, so sheets
-                // read as objects lying on it rather than panels in a dark app.
+            // The register is paper on a paper-coloured ground, so sheets read
+            // as objects lying on it rather than panels in an app.
+            View::Register => {
                 egui::Frame::new()
-                    .fill(GROUND)
+                    .fill(sheet(ui).ground)
                     .inner_margin(egui::Margin::same(12))
                     .show(ui, |ui| self.draw_page_browser(ui));
             }
             View::Devices => self.draw_devices(ui),
         }
         ui.add_space(8.0);
+        self.draw_footer(ui);
+        ui.add_space(6.0);
         StatusBar::show(ui, &self.status);
     }
 }
 
 impl GoghModeApp {
-    fn draw_toolbar(&mut self, ui: &mut egui::Ui) {
-        egui::Frame::new()
-            .fill(Color32::from_rgb(18, 24, 34))
-            .stroke(EguiStroke::new(1.0, Color32::from_rgb(42, 53, 68)))
-            .corner_radius(egui::CornerRadius::same(16))
-            .inner_margin(egui::Margin::symmetric(14, 12))
-            .show(ui, |ui| {
-                ui.vertical(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new("GoghMode")
-                                .size(24.0)
-                                .strong()
-                                .color(Color32::from_rgb(245, 247, 250)),
-                        );
-                        ui.label(
-                            RichText::new("Local sketchpad for your agent")
-                                .size(13.0)
-                                .color(Color32::from_rgb(165, 176, 192)),
-                        );
-                        ui.separator();
-                        self.draw_view_switch(ui);
-                    });
-
-                    ui.add_space(8.0);
-                    ui.horizontal_wrapped(|ui| {
-                        let mut brush_width = self.drawing.brush_width();
-                        ui.add_sized(
-                            [190.0, 30.0],
-                            egui::Slider::new(&mut brush_width, 1.0..=32.0)
-                                .text("Brush")
-                                .step_by(1.0),
-                        );
-                        if brush_width != self.drawing.brush_width() {
-                            self.drawing.set_brush_width(brush_width);
-                        }
-
-                        ui.separator();
-
-                        if primary_button(ui, "Save").clicked() {
-                            let _ = self.save();
-                        }
-                        if ui.button("Undo").clicked() {
-                            self.drawing.undo();
-                            self.save_after_undo();
-                        }
-                        if ui.button("Clear").clicked() {
-                            self.drawing.clear();
-                            self.save_after_clear();
-                        }
-
-                        ui.separator();
-
-                        if primary_button(ui, "Send to agent").clicked() {
-                            self.copy_prompt();
-                        }
-                        if ui.button("Copy image").clicked() {
-                            self.copy_image();
-                        }
-                        if ui.button("Print prompt").clicked() {
-                            self.print_prompt();
-                        }
-                    });
-
-                    ui.add_space(6.0);
-                    ui.horizontal_wrapped(|ui| {
-                        if ui.button("Copy mobile URL").clicked() {
-                            self.copy_mobile_url();
-                        }
-                        if let Some(server) = &self.mobile_server {
-                            ui.label(
-                                RichText::new("Mobile")
-                                    .strong()
-                                    .color(Color32::from_rgb(214, 220, 230)),
-                            );
-                            ui.monospace(server.url());
-                        } else {
-                            ui.label(
-                                RichText::new("Mobile server unavailable")
-                                    .color(Color32::from_rgb(244, 170, 170)),
-                            );
-                        }
-                    });
-
-                    if let Some(warning) = self.port_warning() {
-                        ui.add_space(4.0);
-                        ui.label(RichText::new(warning).color(Color32::from_rgb(244, 200, 120)));
-                    }
-                });
+    fn draw_header(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("GoghMode").size(22.0).strong().color(sheet(ui).ink));
+            ui.label(
+                RichText::new("the drawing set your agent reads")
+                    .size(13.0)
+                    .color(sheet(ui).ink_label),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                self.draw_connection_chip(ui);
             });
+        });
     }
 
-    fn draw_view_switch(&mut self, ui: &mut egui::Ui) {
-        let page_count = self.pages.len();
-        if ui
-            .selectable_label(self.view == View::Canvas, "Canvas")
-            .clicked()
-        {
-            self.view = View::Canvas;
-        }
-        if ui
-            .selectable_label(self.view == View::Pages, format!("Pages ({page_count})"))
-            .clicked()
-        {
-            self.view = View::Pages;
-            self.refresh_pages();
-        }
-        let device_count = self.host.devices().len();
-        if ui
-            .selectable_label(self.view == View::Devices, format!("Devices ({device_count})"))
-            .clicked()
-        {
-            self.view = View::Devices;
-        }
+    /// One chip in place of a whole row of furniture: a copy button, the word
+    /// "Mobile", the URL in monospace, and a port warning were all permanently
+    /// on screen for a fact you need about twice.
+    ///
+    /// egui has no popover, and a collapsing section would shove the register
+    /// down every time it opened, so the detail lives in a menu.
+    fn draw_connection_chip(&mut self, ui: &mut egui::Ui) {
+        let (dot, label) = match &self.bridge {
+            Bridge::Serving(_) => ("\u{25cf}", self.host.identity().display_name),
+            Bridge::Unavailable(_) => ("\u{25cb}", "Not serving".to_owned()),
+        };
+        let tint = match &self.bridge {
+            Bridge::Serving(_) => sheet(ui).ink,
+            Bridge::Unavailable(_) => sheet(ui).stamp,
+        };
+
+        ui.menu_button(RichText::new(format!("{dot}  {label}")).color(tint), |ui| {
+            match &self.bridge {
+                Bridge::Serving(server) => {
+                    let url = server.url().to_owned();
+                    ui.label(RichText::new("Mobile URL").size(11.0).color(sheet(ui).ink_label));
+                    ui.monospace(&url);
+                    ui.add_space(6.0);
+                    if ui.button("Copy mobile URL").clicked() {
+                        self.status = match Clipboard::new()
+                            .and_then(|mut clipboard| clipboard.set_text(url))
+                        {
+                            Ok(()) => "Copied the mobile URL".to_owned(),
+                            Err(_) => "Clipboard unavailable; read the URL above".to_owned(),
+                        };
+                        ui.close();
+                    }
+                }
+                Bridge::Unavailable(reason) => {
+                    ui.label(RichText::new(reason.clone()).color(sheet(ui).stamp));
+                }
+            }
+        });
     }
+
+    /// Where you go, rather than what you do — there is nothing left to do to a
+    /// drawing from here.
+    fn draw_footer(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            let device_count = self.host.devices().len();
+            let (label, target) = match self.view {
+                View::Register => (format!("Devices ({device_count})"), View::Devices),
+                View::Devices => ("Register".to_owned(), View::Register),
+            };
+            if ui.button(label).clicked() {
+                self.view = target;
+                if target == View::Register {
+                    self.refresh_pages();
+                }
+            }
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Reveal drawings folder").clicked() {
+                    self.reveal_drawings_dir();
+                }
+            });
+        });
+    }
+
 
     fn draw_devices(&mut self, ui: &mut egui::Ui) {
         let pairing = self.host.pairing_state();
@@ -607,8 +524,7 @@ impl GoghModeApp {
         // several interfaces should offer all of them; the payload field is
         // already a list so that is a fill-in, not a wire change.
         let addresses = self
-            .mobile_server
-            .as_ref()
+            .server()
             .map(|server| vec![server.base_url()])
             .unwrap_or_default();
 
@@ -682,7 +598,7 @@ impl GoghModeApp {
                 RichText::new("CLAUDE READS")
                     .size(10.0)
                     .strong()
-                    .color(INK_LABEL),
+                    .color(sheet(ui).ink_label),
             );
             match self.pinned_page_id.clone() {
                 Some(page_id) => {
@@ -690,7 +606,7 @@ impl GoghModeApp {
                         RichText::new(self.page_title(&page_id))
                             .size(13.0)
                             .strong()
-                            .color(INK),
+                            .color(sheet(ui).ink),
                     );
                     if ui.button("Lift stamp").clicked() {
                         self.stamp_page(None);
@@ -700,7 +616,7 @@ impl GoghModeApp {
                     ui.label(
                         RichText::new("whichever sheet was drawn on last")
                             .size(13.0)
-                            .color(INK_LABEL),
+                            .color(sheet(ui).ink_label),
                     );
                 }
             }
@@ -732,70 +648,6 @@ impl GoghModeApp {
         );
     }
 
-    fn draw_canvas(&mut self, ui: &mut egui::Ui) {
-        let available = ui.available_size();
-        let size = Vec2::new(available.x.max(1.0), (available.y - 42.0).max(1.0));
-        egui::Frame::canvas(ui.style())
-            .fill(Color32::from_rgb(250, 249, 244))
-            .stroke(EguiStroke::new(1.0, Color32::from_rgb(201, 206, 214)))
-            .corner_radius(egui::CornerRadius::same(18))
-            .inner_margin(egui::Margin::same(0))
-            .show(ui, |ui| {
-                let (canvas_rect, response) = ui.allocate_exact_size(size, Sense::drag());
-                self.drawing
-                    .set_canvas_size(canvas_rect.width(), canvas_rect.height());
-
-                let painter = ui.painter_at(canvas_rect);
-                painter.rect_filled(
-                    canvas_rect,
-                    egui::CornerRadius::same(18),
-                    Color32::from_rgb(250, 249, 244),
-                );
-                painter.rect_stroke(
-                    canvas_rect,
-                    egui::CornerRadius::same(18),
-                    EguiStroke::new(1.0, Color32::from_rgb(201, 206, 214)),
-                    egui::StrokeKind::Inside,
-                );
-
-                if response.drag_started() {
-                    if let Some(pointer) = response.interact_pointer_pos() {
-                        if let Some(local) = local_point(canvas_rect, pointer) {
-                            self.drawing
-                                .begin_stroke(local.x, local.y, 0.5, unix_millis());
-                        }
-                    }
-                }
-
-                if response.dragged() {
-                    if let Some(pointer) = response.interact_pointer_pos() {
-                        if let Some(local) = local_point(canvas_rect, pointer) {
-                            self.drawing
-                                .push_point(local.x, local.y, 0.5, unix_millis());
-                        }
-                    }
-                    ui.ctx().request_repaint();
-                }
-
-                if response.drag_stopped() {
-                    if let Some(pointer) = response.interact_pointer_pos() {
-                        if let Some(local) = local_point(canvas_rect, pointer) {
-                            self.drawing
-                                .push_point(local.x, local.y, 0.5, unix_millis());
-                        }
-                    }
-                    self.drawing.finish_stroke();
-                    let _ = self.save();
-                }
-
-                for stroke in self.drawing.strokes() {
-                    paint_stroke(&painter, canvas_rect, stroke);
-                }
-                if let Some(stroke) = self.drawing.active_stroke() {
-                    paint_stroke(&painter, canvas_rect, stroke);
-                }
-            });
-    }
 }
 
 enum SheetAction {
@@ -818,10 +670,10 @@ fn draw_sheet_card(
 
     ui.allocate_ui(Vec2::new(card_width, THUMBNAIL_HEIGHT as f32 + 96.0), |ui| {
         egui::Frame::new()
-            .fill(PAPER)
+            .fill(sheet(ui).paper)
             .stroke(EguiStroke::new(
                 1.0,
-                if issued { STAMP } else { SHEET_EDGE },
+                if issued { sheet(ui).stamp } else { sheet(ui).edge },
             ))
             .corner_radius(egui::CornerRadius::same(2))
             .inner_margin(egui::Margin::same(0))
@@ -840,28 +692,28 @@ fn draw_sheet_card(
                     // Top rule of the title block.
                     let (rule, painter) =
                         ui.allocate_painter(Vec2::new(card_width, 1.0), Sense::hover());
-                    painter.rect_filled(rule.rect, 0.0, RULE);
+                    painter.rect_filled(rule.rect, 0.0, sheet(ui).rule);
 
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
                         ui.add_space(10.0);
                         ui.vertical(|ui| {
-                            ui.label(RichText::new("SHEET").size(9.0).strong().color(INK_LABEL));
+                            ui.label(RichText::new("SHEET").size(9.0).strong().color(sheet(ui).ink_label));
                             ui.label(
                                 RichText::new(format!("{number:02}"))
                                     .size(12.0)
                                     .monospace()
-                                    .color(INK),
+                                    .color(sheet(ui).ink),
                             );
                         });
                         ui.add_space(10.0);
                         ui.vertical(|ui| {
-                            ui.label(RichText::new("NAME").size(9.0).strong().color(INK_LABEL));
+                            ui.label(RichText::new("NAME").size(9.0).strong().color(sheet(ui).ink_label));
                             ui.label(
                                 RichText::new(page.title.as_deref().unwrap_or(&page.page_id))
                                     .size(13.0)
                                     .strong()
-                                    .color(INK),
+                                    .color(sheet(ui).ink),
                             );
                         });
                     });
@@ -876,7 +728,7 @@ fn draw_sheet_card(
                                 page.stroke_count
                             ))
                             .size(11.0)
-                            .color(INK_LABEL),
+                            .color(sheet(ui).ink_label),
                         );
                     });
 
@@ -891,7 +743,7 @@ fn draw_sheet_card(
                             action = SheetAction::Send;
                         }
                         if issued {
-                            ui.label(RichText::new("ISSUED").size(11.0).strong().color(STAMP));
+                            ui.label(RichText::new("ISSUED").size(11.0).strong().color(sheet(ui).stamp));
                         }
                     });
                     ui.add_space(8.0);
@@ -931,18 +783,32 @@ impl StatusBar {
     }
 }
 
-fn configure_visuals(ctx: &egui::Context) {
-    let mut visuals = egui::Visuals::dark();
-    visuals.window_fill = Color32::from_rgb(10, 14, 20);
-    visuals.panel_fill = Color32::from_rgb(10, 14, 20);
-    visuals.extreme_bg_color = Color32::from_rgb(10, 14, 20);
-    visuals.widgets.inactive.bg_fill = Color32::from_rgb(32, 40, 52);
-    visuals.widgets.inactive.fg_stroke.color = Color32::from_rgb(235, 239, 245);
-    visuals.widgets.hovered.bg_fill = Color32::from_rgb(43, 54, 70);
-    visuals.widgets.active.bg_fill = Color32::from_rgb(62, 76, 96);
-    visuals.selection.bg_fill = Color32::from_rgb(203, 163, 70);
-    visuals.selection.stroke.color = Color32::from_rgb(17, 24, 39);
-    ctx.set_visuals(visuals);
+/// Registered once at startup rather than every frame. The old version ran from
+/// `ui()` and hard-set `Visuals::dark()`, which is why the appearance was
+/// unconditional — and why the paper register sat inside a navy shell looking
+/// like a different application.
+pub fn install_theme(ctx: &egui::Context) {
+    ctx.set_visuals_of(egui::Theme::Light, chrome(&LIGHT, egui::Visuals::light()));
+    ctx.set_visuals_of(egui::Theme::Dark, chrome(&DARK, egui::Visuals::dark()));
+    ctx.set_theme(egui::ThemePreference::System);
+}
+
+/// egui's own chrome — panels, buttons, menus — dressed in the same palette the
+/// sheets use, so nothing on screen belongs to a different set.
+fn chrome(sheet: &Sheet, mut visuals: egui::Visuals) -> egui::Visuals {
+    visuals.window_fill = sheet.ground;
+    visuals.panel_fill = sheet.ground;
+    visuals.extreme_bg_color = sheet.paper;
+    visuals.widgets.noninteractive.fg_stroke.color = sheet.ink_label;
+    visuals.widgets.inactive.bg_fill = sheet.paper;
+    visuals.widgets.inactive.fg_stroke.color = sheet.ink;
+    visuals.widgets.hovered.bg_fill = sheet.edge;
+    visuals.widgets.hovered.fg_stroke.color = sheet.ink;
+    visuals.widgets.active.bg_fill = sheet.rule;
+    visuals.widgets.active.fg_stroke.color = sheet.ink;
+    visuals.selection.bg_fill = sheet.stamp;
+    visuals.selection.stroke.color = sheet.paper;
+    visuals
 }
 
 fn primary_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
@@ -957,39 +823,6 @@ fn primary_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
     )
 }
 
-fn local_point(canvas_rect: Rect, pointer: Pos2) -> Option<Pos2> {
-    if canvas_rect.contains(pointer) {
-        Some(Pos2::new(
-            pointer.x - canvas_rect.left(),
-            pointer.y - canvas_rect.top(),
-        ))
-    } else {
-        None
-    }
-}
-
-fn paint_stroke(painter: &egui::Painter, canvas_rect: Rect, stroke: &Stroke) {
-    match stroke.points.as_slice() {
-        [] => {}
-        [point] => {
-            painter.circle_filled(
-                Pos2::new(canvas_rect.left() + point.x, canvas_rect.top() + point.y),
-                stroke.width / 2.0,
-                Color32::from_rgb(17, 24, 39),
-            );
-        }
-        points => {
-            let screen_points: Vec<Pos2> = points
-                .iter()
-                .map(|point| Pos2::new(canvas_rect.left() + point.x, canvas_rect.top() + point.y))
-                .collect();
-            painter.line(
-                screen_points,
-                EguiStroke::new(stroke.width, Color32::from_rgb(17, 24, 39)),
-            );
-        }
-    }
-}
 
 /// Enough of the identity to tell two hosts apart on screen without printing a
 /// 32-character string at someone.

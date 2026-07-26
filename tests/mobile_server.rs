@@ -1,7 +1,6 @@
 #[allow(dead_code)]
 #[path = "../src/crypto.rs"]
 mod crypto;
-#[allow(dead_code)]
 #[path = "../src/drawing.rs"]
 mod drawing;
 #[path = "../src/export.rs"]
@@ -24,7 +23,7 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
-use mobile_server::MobileServer;
+use mobile_server::{MobileServer, StartOutcome};
 
 /// Every server needs a host identity. Tests get a throwaway one so they never
 /// touch the real `~/.goghmode`.
@@ -75,12 +74,65 @@ fn path_from_url(url: &str) -> &str {
     let slash = rest.find('/').unwrap();
     &rest[slash..]
 }
+/// A port nothing is using, released immediately. Good enough for a test, and
+/// it keeps these away from the real 8787 — which, on a machine where GoghMode
+/// is actually running, is exactly the case under test.
+fn free_port() -> u16 {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    listener.local_addr().unwrap().port()
+}
+
 #[test]
-fn production_start_api_is_available_for_desktop_app() {
+fn the_first_instance_serves_and_reports_its_url() {
     let directory = tempfile::tempdir().unwrap();
     let (_host_dir, host) = test_host();
-    let server = MobileServer::start(directory.path(), host).unwrap();
-    assert!(server.url().starts_with("http://"));
+
+    match MobileServer::start_outcome_on_port_for_test(free_port(), directory.path(), host) {
+        StartOutcome::Running(server) => assert!(server.url().starts_with("http://")),
+        _ => panic!("a free port should have been taken"),
+    }
+}
+
+/// Opening the app twice used to start two servers. Only one can hold 8787, so
+/// the rest fell back to an ephemeral port and were unreachable by every URL a
+/// device had saved — healthy-looking and useless.
+#[test]
+fn a_second_instance_hands_over_rather_than_starting_a_rival_server() {
+    let port = free_port();
+    let directory = tempfile::tempdir().unwrap();
+    let (_first_host_dir, first_host) = test_host();
+    let (_second_host_dir, second_host) = test_host();
+
+    let first =
+        MobileServer::start_outcome_on_port_for_test(port, directory.path(), first_host);
+    assert!(matches!(first, StartOutcome::Running(_)));
+
+    let second =
+        MobileServer::start_outcome_on_port_for_test(port, directory.path(), second_host);
+
+    assert!(
+        matches!(second, StartOutcome::AlreadyRunning),
+        "a GoghMode already on the port must be handed over to, not competed with"
+    );
+}
+
+/// The squatter binds `0.0.0.0` because that is how a server takes a port, and
+/// it is the only case that actually collides: binding `0.0.0.0:P` succeeds
+/// while another process holds only `127.0.0.1:P`, so a loopback-only listener
+/// never stops GoghMode serving the devices that matter.
+#[test]
+fn a_port_held_by_another_program_is_named_as_such() {
+    let squatter = std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap();
+    let port = squatter.local_addr().unwrap().port();
+    let directory = tempfile::tempdir().unwrap();
+    let (_host_dir, host) = test_host();
+
+    let outcome = MobileServer::start_outcome_on_port_for_test(port, directory.path(), host);
+
+    assert!(
+        matches!(outcome, StartOutcome::PortHeldByAnother),
+        "something that is not GoghMode must not be mistaken for one of ours"
+    );
 }
 
 #[test]

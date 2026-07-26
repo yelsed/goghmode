@@ -34,9 +34,9 @@ const CAPABILITIES: &[u8] =
 
 pub const DEFAULT_PORT: u16 = 8787;
 
-/// Everything a request needs to be answered. The paired-device routes live
-/// outside the token prefix — a device authenticates by signature, so the path
-/// secret has no part to play there.
+/// The writes that live behind the token prefix. Grouped so one gate covers all
+/// of them: `pin` names the sheet the agent reads, so an anonymous pin chooses
+/// what the agent sees without ever sending a stroke.
 #[derive(Clone, Copy)]
 enum LegacyWrite {
     Save,
@@ -44,6 +44,9 @@ enum LegacyWrite {
     Promote,
 }
 
+/// Everything a request needs to be answered. The paired-device routes live
+/// outside the token prefix — a device authenticates by signature, so the path
+/// secret has no part to play there.
 struct ServerContext {
     route_prefix: String,
     drawings_dir: PathBuf,
@@ -57,29 +60,75 @@ pub struct MobileServer {
     thread: Option<JoinHandle<()>>,
 }
 
+/// What happened when the host tried to claim its port.
+///
+/// There is no ephemeral fallback. A server on a random port is unreachable by
+/// every URL a device has already saved, which makes it worse than no server at
+/// all: it looks healthy and answers nobody.
+pub enum StartOutcome {
+    Running(MobileServer),
+    /// Another GoghMode already holds the port. Hand over to it rather than run
+    /// a second server against the same drawings directory.
+    AlreadyRunning,
+    /// Something that is not GoghMode holds the port.
+    PortHeldByAnother,
+}
+
+/// Who answers on a port that could not be bound.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PortOwner {
+    GoghMode,
+    Foreign,
+}
+
 impl MobileServer {
-    pub fn start(drawings_dir: impl AsRef<Path>, host: Host) -> anyhow::Result<Self> {
+    /// Binding *is* the lock: no lock file, no stale process identifier, nothing
+    /// left behind by a crash. The port is only investigated after the bind has
+    /// already failed, so there is no gap between checking and taking.
+    pub fn start(drawings_dir: impl AsRef<Path>, host: Host) -> StartOutcome {
         let display_ip = preferred_lan_ip();
         let token = load_or_create_token(&default_token_path()).unwrap_or_else(|_| random_token());
         let drawings_dir = drawings_dir.as_ref().to_path_buf();
+        Self::start_on_port(DEFAULT_PORT, display_ip, token, drawings_dir, host)
+    }
+
+    fn start_on_port(
+        port: u16,
+        display_ip: IpAddr,
+        token: String,
+        drawings_dir: PathBuf,
+        host: Host,
+    ) -> StartOutcome {
         match Self::start_with_token(
             Ipv4Addr::UNSPECIFIED,
-            DEFAULT_PORT,
+            port,
             display_ip,
-            token.clone(),
-            drawings_dir.clone(),
-            Arc::clone(&host),
+            token,
+            drawings_dir,
+            host,
         ) {
-            Ok(server) => Ok(server),
-            Err(_) => Self::start_with_token(
-                Ipv4Addr::UNSPECIFIED,
-                0,
-                display_ip,
-                token,
-                drawings_dir,
-                host,
-            ),
+            Ok(server) => StartOutcome::Running(server),
+            Err(_) => match probe_port_owner(port) {
+                PortOwner::GoghMode => StartOutcome::AlreadyRunning,
+                PortOwner::Foreign => StartOutcome::PortHeldByAnother,
+            },
         }
+    }
+
+    #[allow(dead_code)]
+    #[cfg(test)]
+    pub fn start_outcome_on_port_for_test(
+        port: u16,
+        drawings_dir: impl AsRef<Path>,
+        host: Host,
+    ) -> StartOutcome {
+        Self::start_on_port(
+            port,
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            random_token(),
+            drawings_dir.as_ref().to_path_buf(),
+            host,
+        )
     }
 
     #[allow(dead_code)]
@@ -116,13 +165,6 @@ impl MobileServer {
             .and_then(|(head, _)| head.rsplit_once('/'))
             .map(|(head, _)| head.to_owned())
             .unwrap_or_else(|| self.url.clone())
-    }
-
-    /// The port actually bound. `start` falls back to a random port when 8787
-    /// is taken, which leaves any previously copied URL silently pointing at
-    /// nothing — the desktop app surfaces this rather than hiding it.
-    pub fn port(&self) -> u16 {
-        self.local_addr.port()
     }
 
     fn start_with_token(
@@ -1029,6 +1071,44 @@ fn is_valid_token(token: &str) -> bool {
     token.len() >= 32 && token.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+/// Long enough for a loopback answer, short enough that a wedged listener does
+/// not hold up launching.
+const PROBE_TIMEOUT: Duration = Duration::from_millis(750);
+
+fn probe_port_owner(port: u16) -> PortOwner {
+    match hello_from(port) {
+        Some(response) if is_goghmode_hello(&response) => PortOwner::GoghMode,
+        _ => PortOwner::Foreign,
+    }
+}
+
+/// A GoghMode host answers `/v2/hello` with the features it serves, and nothing
+/// else on the machine advertises `pairing-v2`.
+///
+/// A host running a build from before pairing has no such route and answers
+/// 404, so it reads as foreign. That resolves itself once both processes are the
+/// current build, and the message names the port either way.
+fn is_goghmode_hello(response: &str) -> bool {
+    response.contains("pairing-v2")
+}
+
+fn hello_from(port: u16) -> Option<String> {
+    let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    let mut stream = TcpStream::connect_timeout(&address, PROBE_TIMEOUT).ok()?;
+    stream.set_read_timeout(Some(PROBE_TIMEOUT)).ok()?;
+    stream.set_write_timeout(Some(PROBE_TIMEOUT)).ok()?;
+    write!(
+        stream,
+        "GET /v2/hello HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    )
+    .ok()?;
+
+    // Read as bytes: whatever else is on that port owes us no valid UTF-8.
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).ok()?;
+    Some(String::from_utf8_lossy(&response).into_owned())
+}
+
 fn preferred_lan_ip() -> IpAddr {
     UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
         .and_then(|socket| {
@@ -1075,5 +1155,19 @@ mod tests {
 
         assert_eq!(first, second);
         assert!(first.len() >= 32);
+    }
+
+    #[test]
+    fn only_a_goghmode_hello_counts_as_one_of_ours() {
+        assert!(is_goghmode_hello(
+            r#"HTTP/1.1 200 OK
+
+{"v":1,"features":["pages","pin","promote","pairing-v2"]}"#
+        ));
+        // Some other server on the port, and a GoghMode too old to have the
+        // route. Both are "not ours", which is the answer that matters.
+        assert!(!is_goghmode_hello("HTTP/1.1 200 OK\n\n<html>Grafana</html>"));
+        assert!(!is_goghmode_hello("HTTP/1.1 404 Not Found\n\nNot Found"));
+        assert!(!is_goghmode_hello(""));
     }
 }

@@ -1,3 +1,12 @@
+//! The stroke model and the shape that crosses the wire.
+//!
+//! The desktop stopped drawing when it became a bridge, so the binary now only
+//! ever *deserialises* these types — `Drawing`'s mutation API is exercised by
+//! the integration tests, which build snapshots with it, and by nothing else.
+//! Deleting it would mean the tests could no longer construct a drawing without
+//! hand-writing JSON.
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
