@@ -15,10 +15,11 @@ struct RegisterView: View {
     let onNew: () -> Void
     let onSettings: () -> Void
 
-    @State private var renaming: NotebookPage?
-    @State private var renamingSeries: PageSeries?
-    @State private var draftName = ""
+    @State private var renaming: RenameTarget?
     @State private var openSeries: PageSeries?
+    /// Sheets with a stamp request in flight. The control is disabled while it is
+    /// out, so a second press cannot race the first.
+    @State private var stamping: Set<String> = []
 
     /// Read through the preview cache rather than `page.isEmpty`, which would decode
     /// every stored drawing again on every rebuild.
@@ -37,10 +38,7 @@ struct RegisterView: View {
                     lines
                 }
             }
-            .padding(.horizontal, Sheet.margin)
             .padding(.bottom, Sheet.margin)
-            .frame(maxWidth: 820)
-            .frame(maxWidth: .infinity)
         }
         .background(Sheet.ground)
         .navigationTitle("Pages")
@@ -58,6 +56,13 @@ struct RegisterView: View {
                 }
             }
         }
+        // Asked before anything needs the answer, and asked again whenever it has
+        // been forgotten. Without this the stamp control is drawn on an optimistic
+        // guess and then vanishes the first time it is pressed, which reads as the
+        // app breaking.
+        .task(id: uploader.macIsKnown) {
+            await uploader.learnWhatTheMacAccepts(endpointText: endpointText)
+        }
         .navigationDestination(item: $openSeries) { series in
             SeriesView(
                 store: store,
@@ -66,25 +71,22 @@ struct RegisterView: View {
                 onOpen: onOpen,
                 onNew: { onOpen(store.addPage(in: series.id).id) },
                 onStamp: toggleStamp,
-                onRename: beginRename
+                onRename: { renaming = .sheet($0) },
+                isStamping: { stamping.contains($0.id) }
             )
         }
-        .alert("Name this sheet", isPresented: renamingBinding) {
-            TextField("Sheet name", text: $draftName)
-            Button("Cancel", role: .cancel) { clearRename() }
-            Button("Save") { commitRename() }
-        } message: {
-            Text("Names show in the register and travel to the Mac with the page.")
+        .sheet(item: $renaming) { target in
+            RenameSheet(target: target, onSave: commitRename)
         }
     }
 
-    /// The one line that answers "what is Claude reading?" without opening
-    /// anything. Sits under the title as a rule, the way a sheet register is
-    /// headed.
+    /// The line that answers "what is Claude reading?" without opening anything,
+    /// and the only place a failed upload or stamp can be seen from.
     private var registerHead: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
                 BlockLabel(text: "Claude reads")
+
                 if let pinned = store.pinnedPage {
                     Text(pinned.title)
                         .font(.footnote.weight(.semibold))
@@ -97,21 +99,29 @@ struct RegisterView: View {
                         .foregroundStyle(Sheet.onGroundSecondary)
                         .lineLimit(1)
                 }
-                Spacer(minLength: 0)
+
+                Spacer(minLength: 8)
+
+                StatusBadge(status: uploader.status, canRetry: uploader.canRetry) {
+                    uploader.retry()
+                }
+
                 Text("\(store.pages.count) sheets")
                     .font(.caption.monospaced().weight(.medium))
                     .foregroundStyle(Sheet.onGroundSecondary)
+                    .layoutPriority(1)
             }
             .padding(.horizontal, Sheet.margin)
-            .padding(.vertical, 10)
+            .padding(.vertical, 6)
 
-            if let message = uploader.pagesUnsupportedMessage {
-                Text(message)
+            if let notice {
+                Text(notice)
                     .font(.footnote)
                     .foregroundStyle(Sheet.onGround)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, Sheet.margin)
-                    .padding(.bottom, 10)
+                    .padding(.bottom, 8)
             }
 
             Rectangle().fill(Sheet.rule).frame(height: Sheet.hair)
@@ -119,9 +129,24 @@ struct RegisterView: View {
         .background(Sheet.ground)
     }
 
-    /// One ruled block of paper, hairline-separated. A drawing set's register is a
-    /// ruled index of sheets, so this is a table with aligned columns — not cards,
-    /// and not a plain iOS list either.
+    /// One line of plain language for whatever is currently wrong, most urgent
+    /// first. Silence here has to mean "nothing is wrong", or the register lies.
+    private var notice: String? {
+        if case .failed(let message) = uploader.status {
+            return message
+        }
+        if let message = uploader.pagesUnsupportedMessage {
+            return message
+        }
+        if uploader.macIsKnown && !uploader.pinningSupported {
+            return "\(UploadController.stampNeedsANewerMac) Until then Claude reads whichever sheet you drew on last."
+        }
+        return nil
+    }
+
+    /// One ruled block of paper, hairline-separated, spanning the screen. A drawing
+    /// set's register is a ruled index of sheets, so this is a table with aligned
+    /// columns — not cards, and not a plain iOS list either.
     private var lines: some View {
         LazyVStack(spacing: 0) {
             RegisterHeader()
@@ -138,7 +163,7 @@ struct RegisterView: View {
                         page: page,
                         number: store.sheetNumber(for: page),
                         isIssued: page.id == store.pinnedPageID,
-                        canStamp: uploader.pinningSupported,
+                        stampState: stampState(for: page),
                         onOpen: { onOpen(page.id) },
                         onStamp: { toggleStamp(page) }
                     )
@@ -158,7 +183,7 @@ struct RegisterView: View {
                     )
                     .contextMenu {
                         Button {
-                            beginRenameSeries(series)
+                            renaming = .series(series)
                         } label: {
                             Label("Rename series", systemImage: "pencil")
                         }
@@ -167,23 +192,35 @@ struct RegisterView: View {
             }
         }
         .background(Sheet.paper)
-        .overlay {
-            Rectangle().strokeBorder(Sheet.edge, lineWidth: Sheet.hair)
+        .overlay(alignment: .top) {
+            Rectangle().fill(Sheet.edge).frame(height: Sheet.hair)
         }
-        .padding(.top, 4)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Sheet.edge).frame(height: Sheet.hair)
+        }
+    }
+
+    private func stampState(for page: NotebookPage) -> StampState {
+        if !uploader.pinningSupported && uploader.macIsKnown {
+            return .unavailable
+        }
+        if stamping.contains(page.id) {
+            return .working
+        }
+        return page.id == store.pinnedPageID ? .issued : .available
     }
 
     @ViewBuilder
     private func menu(for page: NotebookPage) -> some View {
         Button {
-            beginRename(page)
+            renaming = .sheet(page)
         } label: {
             Label("Rename", systemImage: "pencil")
         }
 
         if uploader.pinningSupported {
             Button {
-                send(page)
+                Task { _ = await uploader.promote(page.id, endpointText: endpointText) }
             } label: {
                 Label("Send this one now", systemImage: "paperplane")
             }
@@ -198,97 +235,103 @@ struct RegisterView: View {
         }
     }
 
-    private var renamingBinding: Binding<Bool> {
-        Binding(
-            get: { renaming != nil || renamingSeries != nil },
-            set: { if !$0 { clearRename() } }
-        )
-    }
-
-    private func beginRename(_ page: NotebookPage) {
-        draftName = page.title
-        renaming = page
-    }
-
-    private func beginRenameSeries(_ series: PageSeries) {
-        draftName = series.name
-        renamingSeries = series
-    }
-
-    private func commitRename() {
-        if let page = renaming {
-            store.rename(page.id, to: draftName)
-            // The Mac stores the title with the page, so a rename only reaches it
-            // on the next save of that sheet. Send it now when it is the stamped
-            // one, so the register and the Mac never disagree about the name
-            // Claude is reading.
+    private func commitRename(_ target: RenameTarget, _ name: String) {
+        switch target {
+        case .sheet(let page):
+            store.rename(page.id, to: name)
+            // The Mac keeps the title with the page, so a rename only reaches it on
+            // the next save of that sheet. Send it now when it is the stamped one, so
+            // the register and the Mac never disagree about the name Claude reads.
             if page.id == store.pinnedPageID {
-                send(page)
+                Task { _ = await uploader.promote(page.id, endpointText: endpointText) }
             }
+        case .series(let series):
+            store.renameSeries(series.id, to: name)
         }
-        if let series = renamingSeries {
-            store.renameSeries(series.id, to: draftName)
-        }
-        clearRename()
-    }
-
-    private func clearRename() {
-        renaming = nil
-        renamingSeries = nil
-        draftName = ""
     }
 
     private func toggleStamp(_ page: NotebookPage) {
+        guard !stamping.contains(page.id) else { return }
         let target = page.id == store.pinnedPageID ? nil : page.id
+
+        stamping.insert(page.id)
         Task {
-            if await uploader.pin(target, endpointText: endpointText) {
+            let accepted = await uploader.pin(target, endpointText: endpointText)
+            stamping.remove(page.id)
+            if accepted {
                 store.recordPin(target)
             }
+            // A refusal leaves the stamp exactly where the Mac says it is, and the
+            // reason is already on the head line — the control must never show a
+            // state the Mac has not agreed to.
         }
-    }
-
-    private func send(_ page: NotebookPage) {
-        Task { _ = await uploader.promote(page.id, endpointText: endpointText) }
     }
 }
 
-/// Column widths, shared by the header and every line so numbers, dates and stamps
-/// align down their columns. The register is unreadable the moment they drift.
-enum RegisterColumn {
-    static let issuedBar: CGFloat = 3
-    static let lead: CGFloat = 13
-    static let preview: CGFloat = 40
-    static let previewGap: CGFloat = 13
-    static let number: CGFloat = 56
-    static let date: CGFloat = 124
-    static let strokes: CGFloat = 72
-    static let stamp: CGFloat = 104
-    static let chevron: CGFloat = 26
+/// Column widths, derived from one scaled unit so the header and every line cannot
+/// drift apart, and so the whole table grows with the reading size instead of
+/// clipping at large Dynamic Type.
+struct RegisterColumns: Equatable {
+    var scale: CGFloat = 1
+
+    var issuedBar: CGFloat { 3 }
+    var lead: CGFloat { 13 }
+    var trail: CGFloat { 13 }
+    var preview: CGFloat { 40 * scale }
+    var previewHeight: CGFloat { 54 * scale }
+    var previewGap: CGFloat { 13 }
+    var number: CGFloat { 54 * scale }
+    var date: CGFloat { 128 * scale }
+    var strokes: CGFloat { 64 * scale }
+    var stamp: CGFloat { 108 * scale }
+    var chevron: CGFloat { 24 }
 
     /// Everything left of the `SHEET` column, so the header lines up with the rows.
-    static let beforeNumber = issuedBar + lead + preview + previewGap
+    var beforeNumber: CGFloat { issuedBar + lead + preview + previewGap }
+}
+
+private struct RegisterColumnsKey: EnvironmentKey {
+    static let defaultValue = RegisterColumns()
+}
+
+extension EnvironmentValues {
+    var registerColumns: RegisterColumns {
+        get { self[RegisterColumnsKey.self] }
+        set { self[RegisterColumnsKey.self] = newValue }
+    }
 }
 
 /// The ruled head of the register: the column names, in drafting lettering.
 struct RegisterHeader: View {
+    @Environment(\.registerColumns) private var columns
     @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
         HStack(spacing: 0) {
-            Spacer().frame(width: RegisterColumn.beforeNumber)
-            BlockLabel(text: "Sheet").frame(width: RegisterColumn.number, alignment: .leading)
+            Spacer().frame(width: columns.beforeNumber)
+            BlockLabel(text: "Sheet").frame(width: columns.number, alignment: .leading)
             BlockLabel(text: "Name").frame(maxWidth: .infinity, alignment: .leading)
             if sizeClass != .compact {
-                BlockLabel(text: "Updated").frame(width: RegisterColumn.date, alignment: .leading)
-                BlockLabel(text: "Strokes").frame(width: RegisterColumn.strokes, alignment: .leading)
+                BlockLabel(text: "Updated").frame(width: columns.date, alignment: .leading)
+                BlockLabel(text: "Strokes").frame(width: columns.strokes, alignment: .leading)
             }
-            BlockLabel(text: "Claude").frame(width: RegisterColumn.stamp, alignment: .leading)
-            Spacer().frame(width: RegisterColumn.chevron)
+            BlockLabel(text: "Claude").frame(width: columns.stamp, alignment: .leading)
+            Spacer().frame(width: columns.chevron)
         }
-        .padding(.trailing, 13)
+        .padding(.trailing, columns.trail)
         .padding(.vertical, 8)
         .accessibilityHidden(true)
     }
+}
+
+/// What the stamp control can do for one sheet right now.
+enum StampState {
+    case available
+    case issued
+    case working
+    /// The Mac predates the stamp routes; the column stays, so its absence is
+    /// explained rather than mysterious.
+    case unavailable
 }
 
 /// One line of the register: preview, sheet number, name, facts, and the stamp. The
@@ -298,10 +341,11 @@ struct SheetRow: View {
     let page: NotebookPage
     let number: String
     let isIssued: Bool
-    let canStamp: Bool
+    let stampState: StampState
     let onOpen: () -> Void
     let onStamp: () -> Void
 
+    @Environment(\.registerColumns) private var columns
     @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
@@ -311,10 +355,10 @@ struct SheetRow: View {
 
         return RegisterLine(isIssued: isIssued, onOpen: onOpen) {
             SheetPreview(image: rendered.image)
-                .padding(.trailing, RegisterColumn.previewGap)
+                .padding(.trailing, columns.previewGap)
 
             SheetNumber(text: number)
-                .frame(width: RegisterColumn.number, alignment: .leading)
+                .frame(width: columns.number, alignment: .leading)
 
             Text(page.title)
                 .font(.body.weight(.semibold))
@@ -324,27 +368,29 @@ struct SheetRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if sizeClass != .compact {
-                SheetNumber(text: page.updatedAt.formatted(date: .abbreviated, time: .shortened))
-                    .frame(width: RegisterColumn.date, alignment: .leading)
+                SheetNumber(text: SheetRow.stamped(page.updatedAt))
+                    .frame(width: columns.date, alignment: .leading)
                 SheetNumber(text: String(rendered.strokeCount))
-                    .frame(width: RegisterColumn.strokes, alignment: .leading)
+                    .frame(width: columns.strokes, alignment: .leading)
             }
         } trailing: {
-            if canStamp {
-                StampControl(isIssued: isIssued, scale: 0.68, action: onStamp)
-                    .frame(width: RegisterColumn.stamp, alignment: .leading)
-            } else {
-                Spacer().frame(width: RegisterColumn.stamp)
-            }
+            StampControl(state: stampState, action: onStamp)
+                .frame(width: columns.stamp, alignment: .leading)
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(
             Text(
                 isIssued
-                    ? "Sheet \(number), \(page.title). Stamped — this is what Claude reads."
-                    : "Sheet \(number), \(page.title)"
+                    ? "Sheet \(number), \(page.title), \(rendered.strokeCount) strokes. Stamped — this is what Claude reads."
+                    : "Sheet \(number), \(page.title), \(rendered.strokeCount) strokes"
             )
         )
+    }
+
+    /// Short enough for the column at any reading size: "26 Jul, 16:13". The full
+    /// date is spoken by VoiceOver through the row label's own wording.
+    static func stamped(_ date: Date) -> String {
+        date.formatted(.dateTime.day().month(.abbreviated).hour().minute())
     }
 }
 
@@ -356,6 +402,7 @@ struct SeriesRow: View {
     let containsIssued: Bool
     let onOpen: () -> Void
 
+    @Environment(\.registerColumns) private var columns
     @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
@@ -369,34 +416,43 @@ struct SeriesRow: View {
                         .offset(x: CGFloat(offset) * 3, y: CGFloat(offset) * -3)
                 }
             }
-            .frame(width: RegisterColumn.preview, height: 54, alignment: .bottomLeading)
-            .padding(.trailing, RegisterColumn.previewGap)
+            .frame(width: columns.preview, height: columns.previewHeight, alignment: .bottomLeading)
+            .padding(.trailing, columns.previewGap)
 
             SheetNumber(text: series.prefix)
-                .frame(width: RegisterColumn.number, alignment: .leading)
+                .frame(width: columns.number, alignment: .leading)
 
             Text(series.name)
                 .font(.body.weight(.semibold))
                 .foregroundStyle(Sheet.ink)
                 .lineLimit(1)
+                .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if sizeClass != .compact {
                 SheetNumber(text: "\(sheets.count) sheets")
-                    .frame(width: RegisterColumn.date, alignment: .leading)
-                Spacer().frame(width: RegisterColumn.strokes)
+                    .frame(width: columns.date, alignment: .leading)
+                Spacer().frame(width: columns.strokes)
             }
         } trailing: {
-            if containsIssued {
-                IssueStamp(scale: 0.68)
-                    .frame(width: RegisterColumn.stamp, alignment: .leading)
-                    .allowsHitTesting(false)
-            } else {
-                Spacer().frame(width: RegisterColumn.stamp)
+            Group {
+                if containsIssued {
+                    IssueStamp(scale: 0.68)
+                } else {
+                    Color.clear
+                }
             }
+            .frame(width: columns.stamp, alignment: .leading)
+            .allowsHitTesting(false)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(Text("Series \(series.name), \(sheets.count) sheets"))
+        .accessibilityLabel(
+            Text(
+                containsIssued
+                    ? "Series \(series.name), \(sheets.count) sheets, one of them stamped"
+                    : "Series \(series.name), \(sheets.count) sheets"
+            )
+        )
     }
 }
 
@@ -408,17 +464,19 @@ struct RegisterLine<Columns: View, Trailing: View>: View {
     @ViewBuilder var columns: Columns
     @ViewBuilder var trailing: Trailing
 
+    @Environment(\.registerColumns) private var metrics
+
     var body: some View {
         HStack(spacing: 0) {
             Rectangle()
                 .fill(isIssued ? Sheet.stamp : Color.clear)
-                .frame(width: RegisterColumn.issuedBar)
+                .frame(width: metrics.issuedBar)
 
             Button(action: onOpen) {
                 HStack(spacing: 0) {
                     columns
                 }
-                .padding(.leading, RegisterColumn.lead)
+                .padding(.leading, metrics.lead)
                 .frame(minHeight: 44)
                 .contentShape(Rectangle())
             }
@@ -429,51 +487,221 @@ struct RegisterLine<Columns: View, Trailing: View>: View {
             Image(systemName: "chevron.right")
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(Sheet.inkLabel)
-                .frame(width: RegisterColumn.chevron, alignment: .trailing)
+                .frame(width: metrics.chevron, alignment: .trailing)
+                .accessibilityHidden(true)
         }
-        .padding(.trailing, 13)
+        .padding(.trailing, metrics.trail)
         .padding(.vertical, 8)
     }
 }
 
 /// The one control that answers "which sheet does Claude read?". Unstamped it is a
-/// quiet ruled button; on the stamped sheet the control *is* the stamp, and
-/// pressing it lifts the stamp again.
+/// quiet ruled button reading `STAMP`; on the stamped sheet the control *is* the
+/// stamp, and pressing it lifts the stamp again.
 struct StampControl: View {
-    let isIssued: Bool
-    var scale: CGFloat = 1
+    let state: StampState
     let action: () -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Button(action: action) {
-            Group {
-                if isIssued {
-                    IssueStamp(scale: scale)
-                } else {
-                    HStack(spacing: 5) {
-                        Image(systemName: "seal")
-                        Text("STAMP").tracking(0.8)
-                    }
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Sheet.inkLabel)
-                    .padding(.horizontal, 9)
-                    .frame(height: 30)
-                    .overlay {
-                        Rectangle().strokeBorder(Sheet.rule, lineWidth: Sheet.hair)
-                    }
-                }
-            }
-            .frame(minWidth: 44, minHeight: 44)
-            .contentShape(Rectangle())
+            face
+                .frame(minWidth: 44, minHeight: 44, alignment: .leading)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(
-            Text(
-                isIssued
-                    ? "Stamped for Claude. Press to lift the stamp."
-                    : "Stamp this sheet so Claude reads it"
-            )
+        .disabled(state == .working || state == .unavailable)
+        .animation(
+            reduceMotion ? .easeInOut(duration: 0.15) : .spring(response: 0.28, dampingFraction: 0.62),
+            value: state == .issued
         )
+        .accessibilityLabel(Text(spokenLabel))
+    }
+
+    @ViewBuilder
+    private var face: some View {
+        switch state {
+        case .issued:
+            IssueStamp(scale: 0.68)
+                .transition(
+                    reduceMotion ? .opacity : .scale(scale: 1.25).combined(with: .opacity)
+                )
+        case .working:
+            ProgressView()
+                .controlSize(.small)
+                .padding(.leading, 4)
+        case .unavailable:
+            Text("—")
+                .font(.caption.monospaced())
+                .foregroundStyle(Sheet.inkLabel)
+                .padding(.leading, 4)
+        case .available:
+            HStack(spacing: 5) {
+                Image(systemName: "seal")
+                Text("STAMP").tracking(0.8)
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(Sheet.inkLabel)
+            .padding(.horizontal, 9)
+            .frame(height: 30)
+            .overlay {
+                Rectangle().strokeBorder(Sheet.rule, lineWidth: Sheet.hair)
+            }
+        }
+    }
+
+    private var spokenLabel: String {
+        switch state {
+        case .issued: "Stamped for Claude. Press to lift the stamp."
+        case .working: "Asking the Mac to move the stamp"
+        case .unavailable: "Stamping needs a newer Mac app"
+        case .available: "Stamp this sheet so Claude reads it"
+        }
+    }
+}
+
+/// Renaming lives in its own sheet rather than an alert with a text field: the draft
+/// name is state *inside* this view, so typing rebuilds only this form. Held in the
+/// parent it rebuilt the whole register on every keystroke, which dismissed the
+/// alert mid-word.
+struct RenameSheet: View {
+    let target: RenameTarget
+    let onSave: (RenameTarget, String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft: String
+    @FocusState private var editing: Bool
+
+    init(target: RenameTarget, onSave: @escaping (RenameTarget, String) -> Void) {
+        self.target = target
+        self.onSave = onSave
+        _draft = State(initialValue: target.currentName)
+    }
+
+    private var trimmed: String {
+        draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(spacing: 0) {
+                    Rectangle().fill(Sheet.rule).frame(height: Sheet.hair)
+
+                    HStack(spacing: 0) {
+                        BlockField(label: target.numberLabel) {
+                            SheetNumber(text: target.number)
+                        }
+                        .frame(width: 74, alignment: .leading)
+
+                        Rectangle()
+                            .fill(Sheet.ruleHair)
+                            .frame(width: Sheet.hair)
+                            .frame(maxHeight: .infinity)
+
+                        BlockField(label: "Name") {
+                            TextField("Sheet name", text: $draft)
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(Sheet.ink)
+                                .focused($editing)
+                                .submitLabel(.done)
+                                .onSubmit(save)
+                                .frame(minHeight: 32)
+                        }
+                        .padding(.horizontal, Sheet.block)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+
+                    Rectangle().fill(Sheet.ruleHair).frame(height: Sheet.hair)
+                }
+                .background(Sheet.paper)
+                .overlay {
+                    Rectangle().strokeBorder(Sheet.edge, lineWidth: Sheet.hair)
+                }
+
+                Text(target.explanation)
+                    .font(.footnote)
+                    .foregroundStyle(Sheet.onGroundSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 12)
+
+                Spacer(minLength: 0)
+            }
+            .padding(Sheet.margin)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Sheet.ground)
+            .navigationTitle(target.formTitle)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save", action: save)
+                        .disabled(trimmed.isEmpty)
+                }
+            }
+        }
+        .presentationDetents([.height(260), .medium])
+        .onAppear { editing = true }
+    }
+
+    private func save() {
+        guard !trimmed.isEmpty else { return }
+        onSave(target, trimmed)
+        dismiss()
+    }
+}
+
+/// What is being renamed. Carries its own labels so the form does not have to ask.
+enum RenameTarget: Identifiable {
+    case sheet(NotebookPage)
+    case series(PageSeries)
+
+    var id: String {
+        switch self {
+        case .sheet(let page): "sheet-\(page.id)"
+        case .series(let series): "series-\(series.id)"
+        }
+    }
+
+    var currentName: String {
+        switch self {
+        case .sheet(let page): page.title
+        case .series(let series): series.name
+        }
+    }
+
+    var formTitle: String {
+        switch self {
+        case .sheet: "Name this sheet"
+        case .series: "Name this series"
+        }
+    }
+
+    var numberLabel: String {
+        switch self {
+        case .sheet: "Sheet"
+        case .series: "Series"
+        }
+    }
+
+    var number: String {
+        switch self {
+        case .sheet: "—"
+        case .series(let series): series.prefix
+        }
+    }
+
+    var explanation: String {
+        switch self {
+        case .sheet:
+            "Names show in the register and travel to the Mac with the page."
+        case .series:
+            "Sheets filed into this series are numbered within it."
+        }
     }
 }
 
@@ -486,6 +714,7 @@ struct SeriesView: View {
     let onNew: () -> Void
     let onStamp: (NotebookPage) -> Void
     let onRename: (NotebookPage) -> Void
+    let isStamping: (NotebookPage) -> Bool
 
     var body: some View {
         ScrollView {
@@ -501,7 +730,7 @@ struct SeriesView: View {
                         page: page,
                         number: store.sheetNumber(for: page),
                         isIssued: page.id == store.pinnedPageID,
-                        canStamp: uploader.pinningSupported,
+                        stampState: stampState(for: page),
                         onOpen: { onOpen(page.id) },
                         onStamp: { onStamp(page) }
                     )
@@ -516,13 +745,13 @@ struct SeriesView: View {
                 }
             }
             .background(Sheet.paper)
-            .overlay {
-                Rectangle().strokeBorder(Sheet.edge, lineWidth: Sheet.hair)
+            .overlay(alignment: .top) {
+                Rectangle().fill(Sheet.edge).frame(height: Sheet.hair)
             }
-            .padding(.horizontal, Sheet.margin)
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Sheet.edge).frame(height: Sheet.hair)
+            }
             .padding(.vertical, 4)
-            .frame(maxWidth: 820)
-            .frame(maxWidth: .infinity)
         }
         .background(Sheet.ground)
         .navigationTitle(series.name)
@@ -534,6 +763,16 @@ struct SeriesView: View {
                 }
             }
         }
+    }
+
+    private func stampState(for page: NotebookPage) -> StampState {
+        if !uploader.pinningSupported && uploader.macIsKnown {
+            return .unavailable
+        }
+        if isStamping(page) {
+            return .working
+        }
+        return page.id == store.pinnedPageID ? .issued : .available
     }
 }
 
@@ -582,8 +821,8 @@ enum SheetPreviewCache {
 /// was drawn actually shows up.
 struct SheetPreview: View {
     let image: UIImage
-    var width: CGFloat = 40
-    var height: CGFloat = 54
+
+    @Environment(\.registerColumns) private var columns
 
     init(page: NotebookPage) {
         self.image = SheetPreviewCache.rendered(for: page).image
@@ -597,7 +836,7 @@ struct SheetPreview: View {
         Image(uiImage: image)
             .resizable()
             .aspectRatio(contentMode: .fit)
-            .frame(width: width, height: height)
+            .frame(width: columns.preview, height: columns.previewHeight)
             .background(Sheet.paper)
             .overlay {
                 Rectangle().strokeBorder(Sheet.ruleHair, lineWidth: Sheet.hair)

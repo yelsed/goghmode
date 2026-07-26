@@ -32,9 +32,13 @@ final class UploadController: ObservableObject {
     /// itself rather than pretending a page switch means anything there.
     @Published private(set) var pagesSupported = true
 
-    /// False on a Mac that understands pages but not the stamp routes. The stamp
-    /// is withheld rather than shown doing nothing.
+    /// False on a Mac that understands pages but not the stamp routes.
     @Published private(set) var pinningSupported = true
+
+    /// Whether the two flags above are an answer or a guess. Until a Mac has
+    /// actually replied they are optimism, and a control drawn on optimism that
+    /// disappears the moment it is pressed reads as the app breaking.
+    @Published private(set) var macIsKnown = false
 
     private let client: GoghModeClient
     private var pendingUpload: Task<Void, Never>?
@@ -121,7 +125,25 @@ final class UploadController: ObservableObject {
         capabilitiesByEndpoint[endpointText] = capabilities
         pagesSupported = capabilities.supportsPages
         pinningSupported = capabilities.supportsPinning
+        macIsKnown = true
         return capabilities
+    }
+
+    /// Asks the Mac what it accepts before anything needs the answer, so controls
+    /// are drawn in the state they will actually behave in.
+    func learnWhatTheMacAccepts(endpointText: String) async {
+        guard let endpoint = GoghModeEndpoint(endpointText) else { return }
+        _ = await resolvedCapabilities(for: endpoint, endpointText: endpointText, client: client)
+    }
+
+    /// Forgets what a Mac said it accepts. Called when the address changes, and when
+    /// the app comes back — the Mac may have been updated in between, and a cached
+    /// "too old" answer would keep the stamp switched off forever.
+    func forgetWhatTheMacAccepts() {
+        capabilitiesByEndpoint.removeAll()
+        macIsKnown = false
+        pagesSupported = true
+        pinningSupported = true
     }
 
     /// Stamps a page as the one Claude reads, or clears the stamp with `nil`.
@@ -134,7 +156,15 @@ final class UploadController: ObservableObject {
         }
 
         do {
-            _ = await resolvedCapabilities(for: endpoint, endpointText: endpointText, client: client)
+            let capabilities = await resolvedCapabilities(
+                for: endpoint,
+                endpointText: endpointText,
+                client: client
+            )
+            guard capabilities.supportsPinning else {
+                status = .failed(UploadController.stampNeedsANewerMac)
+                return false
+            }
             try await client.pin(pageID, on: endpoint)
             return true
         } catch {
@@ -142,6 +172,9 @@ final class UploadController: ObservableObject {
             return false
         }
     }
+
+    static let stampNeedsANewerMac =
+        "This Mac is too old to stamp a sheet. Update the Mac app."
 
     /// Sends one page now without moving the stamp.
     func promote(_ pageID: String, endpointText: String) async -> Bool {
@@ -151,6 +184,15 @@ final class UploadController: ObservableObject {
         }
 
         do {
+            let capabilities = await resolvedCapabilities(
+                for: endpoint,
+                endpointText: endpointText,
+                client: client
+            )
+            guard capabilities.supportsPinning else {
+                status = .failed(UploadController.stampNeedsANewerMac)
+                return false
+            }
             try await client.promote(pageID, on: endpoint)
             status = .saved(Date())
             return true

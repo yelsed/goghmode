@@ -13,6 +13,10 @@ struct ContentView: View {
     @State private var openPageID: String?
     @State private var showingSettings = false
 
+    /// The register's column widths are derived from one scaled unit, injected here
+    /// so every screen in the stack measures its table the same way.
+    @ScaledMetric(relativeTo: .body) private var columnUnit: CGFloat = 100
+
     private var endpoint: GoghModeEndpoint? {
         GoghModeEndpoint(endpointText)
     }
@@ -31,12 +35,18 @@ struct ContentView: View {
                 register
             }
         }
+        .environment(\.registerColumns, RegisterColumns(scale: columnUnit / 100))
         .onChange(of: scenePhase) { _, newPhase in
-            // Coming back to the app is the moment the Mac is most likely to
-            // have been reopened, so it is the natural time to re-check.
+            // Coming back to the app is the moment the Mac is most likely to have
+            // been reopened — or updated — so both the pending upload and what the
+            // Mac claims to accept are worth asking about again.
             if newPhase == .active {
+                uploader.forgetWhatTheMacAccepts()
                 uploader.retryIfOffline()
             }
+        }
+        .onChange(of: endpointText) { _, _ in
+            uploader.forgetWhatTheMacAccepts()
         }
     }
 
@@ -82,8 +92,9 @@ struct CanvasView: View {
     @State private var drawing = PKDrawing()
     @State private var canvasSize = CGSize(width: 1024, height: 1366)
     @State private var reloadSignal = 0
-    @State private var renaming = false
-    @State private var draftName = ""
+    @State private var renaming: RenameTarget?
+    @State private var confirmingClear = false
+    @State private var stamping = false
 
     private var page: NotebookPage? {
         store.page(pageID)
@@ -120,22 +131,26 @@ struct CanvasView: View {
                     uploader.retry()
                 }
 
-                if uploader.pinningSupported, let page {
-                    StampControl(isIssued: page.id == store.pinnedPageID, scale: 0.66) {
+                if let page {
+                    StampControl(state: stampState(for: page)) {
                         toggleStamp(page)
                     }
                 }
 
                 Button {
-                    draftName = page?.title ?? ""
-                    renaming = true
+                    if let page {
+                        renaming = .sheet(page)
+                    }
                 } label: {
                     Label("Rename", systemImage: "pencil")
                 }
 
-                Button(action: clearSheet) {
+                Button(role: .destructive) {
+                    confirmingClear = true
+                } label: {
                     Label("Clear", systemImage: "eraser")
                 }
+                .disabled(drawing.strokes.isEmpty)
             }
         }
         .onAppear {
@@ -152,13 +167,35 @@ struct CanvasView: View {
                 uploadCurrentSheet()
             }
         }
-        .alert("Name this sheet", isPresented: $renaming) {
-            TextField("Sheet name", text: $draftName)
-            Button("Cancel", role: .cancel) { draftName = "" }
-            Button("Save") { commitRename() }
-        } message: {
-            Text("Names show in the register and travel to the Mac with the page.")
+        .sheet(item: $renaming) { target in
+            RenameSheet(target: target) { _, name in
+                commitRename(to: name)
+            }
         }
+        // Clearing a sheet cannot be undone, so it asks. The eraser used to wipe
+        // every stroke on the first press with no way back.
+        .confirmationDialog(
+            "Clear this sheet?",
+            isPresented: $confirmingClear,
+            titleVisibility: .visible
+        ) {
+            Button("Erase every stroke", role: .destructive, action: clearSheet)
+            Button("Keep it", role: .cancel) {}
+        } message: {
+            Text(
+                "\(drawing.strokes.count) strokes on \(page?.title ?? "this sheet") are erased on the iPad and on the Mac. This cannot be undone."
+            )
+        }
+    }
+
+    private func stampState(for page: NotebookPage) -> StampState {
+        if !uploader.pinningSupported && uploader.macIsKnown {
+            return .unavailable
+        }
+        if stamping {
+            return .working
+        }
+        return page.id == store.pinnedPageID ? .issued : .available
     }
 
     private func snapshot(of pencilDrawing: PKDrawing) -> DrawingSnapshot {
@@ -183,9 +220,8 @@ struct CanvasView: View {
         )
     }
 
-    private func commitRename() {
-        store.rename(pageID, to: draftName)
-        draftName = ""
+    private func commitRename(to name: String) {
+        store.rename(pageID, to: name)
         // The Mac keeps the title with the page, so a rename only reaches it on the
         // next save. Send it now, so the register and the Mac never disagree about
         // the name Claude is reading.
@@ -193,9 +229,14 @@ struct CanvasView: View {
     }
 
     private func toggleStamp(_ page: NotebookPage) {
+        guard !stamping else { return }
         let target = page.id == store.pinnedPageID ? nil : page.id
+
+        stamping = true
         Task {
-            if await uploader.pin(target, endpointText: endpointText) {
+            let accepted = await uploader.pin(target, endpointText: endpointText)
+            stamping = false
+            if accepted {
                 store.recordPin(target)
             }
         }
