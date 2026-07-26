@@ -12,30 +12,38 @@ Universal build: iPhone and iPad (`TARGETED_DEVICE_FAMILY = "1,2"`), iOS 17
 minimum.
 
 ## Layout
-Two states in one root view.
+Setup until paired, then a `NavigationStack` whose root is the register.
 
-- **Setup** — the host list. Pairing scans a QR code from the desktop's Devices
-  panel, or takes the same payload pasted as text. `HostStore` keeps the saved
-  hosts; their keys are in the Keychain, non-syncing.
-- **Drawing** — a toolbar row above a full-bleed canvas:
-  - Status badge (also the retry button)
-  - Host chip — the destination, always visible, tap to switch
-  - Save Now
-  - Clear
-  - Settings (back to the host list)
-  - `PKCanvasView` filling everything below, with the system tool palette floating
-    over it.
+- **Setup** — the host list (`HostListView`). Pairing scans a QR code from the
+  desktop's Devices panel, or takes the same payload pasted as text. `HostStore`
+  keeps the saved hosts; their keys are in the Keychain, non-syncing. Reachable
+  again later as a settings sheet. The old URL field is gone: it could only create
+  unauthenticated links, which [ADR-0006](../../decisions/0006-paired-devices-over-shared-url-token.md)
+  retires. An endpoint saved by an earlier build is adopted into the list instead.
+- **Register** (root, `RegisterView`) — the overview. Head rule naming the stamped
+  sheet, then a ruled index: one line per sheet or series, columns `SHEET`, `NAME`,
+  `UPDATED`, `STROKES`, `AGENT`. Toolbar carries **New sheet** and **Settings** —
+  new sheets are made here and nowhere else. Dragging one line onto another files
+  both into a series; a series line pushes `SeriesView`, the same index scoped to it.
+- **Canvas** (`CanvasView`, pushed) — a full-bleed `PKCanvasView` with the system
+  tool palette floating over it. Navigation title is the sheet's name; the back
+  button returns to the register. Toolbar: status badge (also retry), stamp control,
+  rename, clear. Leaving the sheet uploads it immediately rather than waiting out the
+  debounce.
 
 ## Components
 
 | File | Responsibility |
 | --- | --- |
 | `GoghModeCompanionApp.swift` | `@main`, single `WindowGroup`. |
-| `ContentView.swift` | Setup vs drawing state, owns `PKDrawing`, canvas size, clear signal. |
+| `ContentView.swift` | Pairing gate, the navigation stack, `CanvasView`, `StatusBadge`, `SetupView`. |
+| `RegisterView.swift` | The overview: head rule, ruled index, rows, stamp control, series, previews. |
+| `PageStore.swift` | Local pages and series, persistence, sheet numbering, recorded pin. |
+| `DrawingSetStyle.swift` | The Drawing Set tokens and the shared drafting primitives. |
 | `PencilCanvasView.swift` | `UIViewRepresentable` around `PKCanvasView` + `PKToolPicker`. |
 | `DrawingSnapshot.swift` | Codable wire schema and the `PKDrawing` → snapshot conversion. |
-| `GoghModeClient.swift` | Endpoint normalization, `URLSession` POST, `UploadError`. |
-| `UploadController.swift` | `@MainActor ObservableObject` — debounce, status machine, retry. |
+| `GoghModeClient.swift` | Endpoint normalization, `URLSession` POST, capabilities, pin/promote, `UploadError`. |
+| `UploadController.swift` | `@MainActor ObservableObject` — debounce, status machine, retry, capability probe. |
 
 ### Sub-component specs
 - [export-contract](../components/export-contract.md) — the schema this app must match exactly.

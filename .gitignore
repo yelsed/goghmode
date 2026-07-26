@@ -31,3 +31,6 @@ xcuserdata/
 
 # OMC runtime state
 .omc/
+
+# Impeccable decision-page state
+/.impeccable/

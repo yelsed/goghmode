@@ -3,6 +3,8 @@ import Foundation
 struct GoghModeEndpoint: Equatable {
     let saveURL: URL
     let capabilitiesURL: URL
+    let pinURL: URL
+    let promoteURL: URL
 
     init?(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -27,17 +29,22 @@ struct GoghModeEndpoint: Equatable {
         }
 
         let root = path
-        components.percentEncodedPath = root + "save"
-        guard let save = components.url else {
-            return nil
+        func route(_ name: String) -> URL? {
+            components.percentEncodedPath = root + name
+            return components.url
         }
-        components.percentEncodedPath = root + "capabilities"
-        guard let capabilities = components.url else {
+
+        guard let save = route("save"),
+              let capabilities = route("capabilities"),
+              let pin = route("pin"),
+              let promote = route("promote") else {
             return nil
         }
 
         saveURL = save
         capabilitiesURL = capabilities
+        pinURL = pin
+        promoteURL = promote
     }
 }
 
@@ -52,25 +59,74 @@ struct GoghModeCapabilities: Codable, Equatable {
         features: []
     )
 
+    /// What to assume when the host could not be asked. Optimism is right here: the
+    /// save that follows is the real test, and it reports its own failure. Assuming
+    /// the worst instead turns one dropped probe into a standing complaint.
+    static let assumeCurrent = GoghModeCapabilities(
+        schemaVersions: [pagelessSchemaVersion, currentSchemaVersion],
+        features: ["pages", "pin", "promote"]
+    )
+
     var supportsPages: Bool {
         schemaVersions.contains(currentSchemaVersion)
+    }
+
+    /// A host that knows about pages but not pinning still works; the stamp is
+    /// simply not offered rather than silently doing nothing.
+    var supportsPinning: Bool {
+        features.contains("pin") && features.contains("promote")
     }
 }
 
 struct GoghModeClient {
     var session: URLSession = .shared
 
-    /// Asks the host what it accepts. Probing beats inferring from a rejection:
-    /// a 404 here is an old host, and anything else unreadable is treated the
-    /// same way, so the drawing still gets through as version 1.
-    func capabilities(of endpoint: GoghModeEndpoint) async -> GoghModeCapabilities {
+    /// Asks the host what it accepts. Probing beats inferring from a rejection: a
+    /// 404 here is a host from before pages, so the drawing still gets through as
+    /// version 1.
+    ///
+    /// Returns `nil` when the host could not be asked at all. A timeout or a
+    /// dropped socket is not evidence of an old host, and treating it as one
+    /// switched pages and stamping off until the app was restarted — a complaint
+    /// that outlived every successful save after it.
+    func capabilities(of endpoint: GoghModeEndpoint) async -> GoghModeCapabilities? {
         guard let (data, response) = try? await session.data(from: endpoint.capabilitiesURL),
-              let httpResponse = response as? HTTPURLResponse,
-              (200..<300).contains(httpResponse.statusCode),
-              let capabilities = try? JSONDecoder().decode(GoghModeCapabilities.self, from: data) else {
+              let httpResponse = response as? HTTPURLResponse else {
+            return nil
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
             return .pagelessHost
         }
-        return capabilities
+        return (try? JSONDecoder().decode(GoghModeCapabilities.self, from: data)) ?? .pagelessHost
+    }
+
+    /// Stamps a page as the one `latest.*` follows, or clears the stamp with
+    /// `nil`. The host owns this state; the app asks and then records the answer.
+    func pin(_ pageID: String?, on endpoint: GoghModeEndpoint) async throws {
+        try await postPageID(pageID, to: endpoint.pinURL)
+    }
+
+    /// Sends one page now without moving the stamp.
+    func promote(_ pageID: String, on endpoint: GoghModeEndpoint) async throws {
+        try await postPageID(pageID, to: endpoint.promoteURL)
+    }
+
+    private func postPageID(_ pageID: String?, to url: URL) async throws {
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["pageId": pageID])
+
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw UploadError.invalidResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            // The host names what was wrong in the body; passing it through beats
+            // inventing a generic message on top of a specific one.
+            let reason = String(data: data, encoding: .utf8) ?? ""
+            throw UploadError.rejected(reason.isEmpty ? "The desktop rejected it." : reason)
+        }
     }
 
     func upload(_ snapshot: DrawingSnapshot, to endpoint: GoghModeEndpoint) async throws {
@@ -101,10 +157,60 @@ struct GoghModeClient {
         secret: String,
         deviceID: String
     ) async throws {
-        guard let url = URL(string: host.address + "/v2/save") else {
+        _ = try await signedPost(
+            try JSONEncoder().encode(snapshot),
+            to: "/v2/save",
+            on: host,
+            secret: secret,
+            deviceID: deviceID
+        )
+    }
+
+    /// Stamps a sheet on a paired host, or clears the stamp with `nil`.
+    ///
+    /// Choosing which sheet the agent reads is as consequential as sending one,
+    /// so it goes through the same signed door rather than a quieter one.
+    func pin(
+        _ pageID: String?,
+        on host: SavedHost,
+        secret: String,
+        deviceID: String
+    ) async throws {
+        _ = try await signedPost(
+            try JSONEncoder().encode(["pageId": pageID]),
+            to: "/v2/pin",
+            on: host,
+            secret: secret,
+            deviceID: deviceID
+        )
+    }
+
+    func promote(
+        _ pageID: String,
+        on host: SavedHost,
+        secret: String,
+        deviceID: String
+    ) async throws {
+        _ = try await signedPost(
+            try JSONEncoder().encode(["pageId": pageID]),
+            to: "/v2/promote",
+            on: host,
+            secret: secret,
+            deviceID: deviceID
+        )
+    }
+
+    @discardableResult
+    private func signedPost(
+        _ body: Data,
+        to routePath: String,
+        on host: SavedHost,
+        secret: String,
+        deviceID: String
+    ) async throws -> Data {
+        guard let url = URL(string: host.address + routePath) else {
             throw UploadError.invalidEndpoint
         }
-        let body = try JSONEncoder().encode(snapshot)
         let timestamp = Date().unixMillis
         let nonce = GoghModeCrypto.randomHex(byteCount: 16)
         guard !nonce.isEmpty else {
@@ -130,7 +236,7 @@ struct GoghModeClient {
         )
         request.httpBody = body
 
-        let (_, response) = try await session.data(for: request)
+        let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw UploadError.invalidResponse
         }
@@ -146,8 +252,14 @@ struct GoghModeClient {
         }
 
         guard (200..<300).contains(httpResponse.statusCode) else {
-            throw UploadError.serverStatus(httpResponse.statusCode)
+            // The host names what was wrong in the body, and it has just proved
+            // it is the host, so the reason can be trusted enough to show.
+            let reason = String(data: data, encoding: .utf8) ?? ""
+            throw reason.isEmpty
+                ? UploadError.serverStatus(httpResponse.statusCode)
+                : UploadError.rejected(reason)
         }
+        return data
     }
 }
 
@@ -157,6 +269,7 @@ enum UploadError: Error, Equatable, LocalizedError {
     case serverStatus(Int)
     case wrongHost(String)
     case noSecureRandom
+    case rejected(String)
 
     var errorDescription: String? {
         switch self {
@@ -170,6 +283,8 @@ enum UploadError: Error, Equatable, LocalizedError {
             "The machine at that address is not \(name). Nothing was sent."
         case .noSecureRandom:
             "This device could not generate a secure value, so nothing was sent."
+        case .rejected(let reason):
+            reason
         }
     }
 }

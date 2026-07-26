@@ -442,3 +442,182 @@ fn saving_two_pages_indexes_both_and_points_latest_at_the_newer_one() {
     .unwrap();
     assert_eq!(latest["page"]["id"], "page-b");
 }
+
+fn post_json(server: &MobileServer, route: &str, body: &str) -> String {
+    let path = format!("{}{route}", path_from_url(server.url()));
+    http_post(server.url(), &path, body)
+}
+
+fn latest_page_id(directory: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(directory.join("latest.json")).ok()?;
+    let latest: serde_json::Value = serde_json::from_str(&text).ok()?;
+    latest["page"]["id"].as_str().map(str::to_owned)
+}
+
+#[test]
+fn a_pinned_page_keeps_latest_even_when_another_page_is_drawn_on() {
+    let directory = tempfile::tempdir().unwrap();
+    let (_host_dir, host) = test_host();
+    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
+    save_snapshot(
+        &server,
+        &snapshot_body(2, r#""page": { "id": "keeper", "title": "Keeper" },"#),
+    );
+
+    let pinned = post_json(&server, "pin", r#"{"pageId":"keeper"}"#);
+    save_snapshot(
+        &server,
+        &snapshot_body(2, r#""page": { "id": "scribble", "title": "Scribble" },"#),
+    );
+
+    assert!(pinned.starts_with("HTTP/1.1 200 OK"));
+    // The other page is still stored in full — pinning protects the agent's
+    // view, it does not discard work.
+    assert!(directory
+        .path()
+        .join("pages")
+        .join("scribble")
+        .join("page.json")
+        .exists());
+    assert_eq!(latest_page_id(directory.path()).as_deref(), Some("keeper"));
+}
+
+#[test]
+fn clearing_the_pin_returns_latest_to_following_the_newest_page() {
+    let directory = tempfile::tempdir().unwrap();
+    let (_host_dir, host) = test_host();
+    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
+    save_snapshot(&server, &snapshot_body(2, r#""page": { "id": "keeper" },"#));
+    post_json(&server, "pin", r#"{"pageId":"keeper"}"#);
+
+    post_json(&server, "pin", r#"{"pageId":null}"#);
+    save_snapshot(&server, &snapshot_body(2, r#""page": { "id": "scribble" },"#));
+
+    assert_eq!(latest_page_id(directory.path()).as_deref(), Some("scribble"));
+}
+
+#[test]
+fn pinning_points_latest_at_that_page_immediately() {
+    let directory = tempfile::tempdir().unwrap();
+    let (_host_dir, host) = test_host();
+    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
+    save_snapshot(&server, &snapshot_body(2, r#""page": { "id": "first" },"#));
+    save_snapshot(&server, &snapshot_body(2, r#""page": { "id": "second" },"#));
+
+    post_json(&server, "pin", r#"{"pageId":"first"}"#);
+
+    assert_eq!(latest_page_id(directory.path()).as_deref(), Some("first"));
+    let index: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(directory.path().join("pages").join("index.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(index["pinnedPageId"], "first");
+}
+
+#[test]
+fn promote_sends_one_page_without_moving_the_pin() {
+    let directory = tempfile::tempdir().unwrap();
+    let (_host_dir, host) = test_host();
+    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
+    save_snapshot(&server, &snapshot_body(2, r#""page": { "id": "pinned-one" },"#));
+    save_snapshot(&server, &snapshot_body(2, r#""page": { "id": "other" },"#));
+    post_json(&server, "pin", r#"{"pageId":"pinned-one"}"#);
+
+    let response = post_json(&server, "promote", r#"{"pageId":"other"}"#);
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"));
+    assert_eq!(latest_page_id(directory.path()).as_deref(), Some("other"));
+
+    // The pin is untouched, so an unpinned page still cannot take latest.* — the
+    // sent page stays until something allowed to write it does.
+    save_snapshot(&server, &snapshot_body(2, r#""page": { "id": "third" },"#));
+    assert_eq!(latest_page_id(directory.path()).as_deref(), Some("other"));
+
+    // Drawing on the pinned page is allowed, and that is what ends the override.
+    save_snapshot(&server, &snapshot_body(2, r#""page": { "id": "pinned-one" },"#));
+    assert_eq!(
+        latest_page_id(directory.path()).as_deref(),
+        Some("pinned-one")
+    );
+}
+
+#[test]
+fn pin_and_promote_refuse_page_ids_that_could_escape_the_directory() {
+    let directory = tempfile::tempdir().unwrap();
+    let (_host_dir, host) = test_host();
+    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
+
+    for route in ["pin", "promote"] {
+        let response = post_json(&server, route, r#"{"pageId":"../escape"}"#);
+
+        assert!(
+            response.starts_with("HTTP/1.1 400 Bad Request"),
+            "{route} accepted a traversal id"
+        );
+        assert!(response.contains("not usable as a folder name"));
+    }
+
+    let missing = post_json(&server, "promote", r#"{"pageId":"never-drawn"}"#);
+    assert!(missing.starts_with("HTTP/1.1 400 Bad Request"));
+    assert!(!directory.path().join("latest.json").exists());
+}
+
+#[test]
+fn capabilities_advertise_pin_and_promote_so_an_older_mac_is_distinguishable() {
+    let (_host_dir, host) = test_host();
+    let server = MobileServer::start_loopback_for_test(host).unwrap();
+    let base_path = path_from_url(server.url());
+
+    let response = http_request(server.url(), "GET", &format!("{base_path}capabilities"));
+
+    assert!(response.contains("\"pin\""));
+    assert!(response.contains("\"promote\""));
+}
+
+/// Stamping a sheet the Mac has never received used to fail with a 400, because
+/// pinning tried to promote a page that was not on disk. A pin is a declaration
+/// about which page `latest.*` follows, so it has to survive naming a page that has
+/// not arrived yet — and take effect the moment it does.
+#[test]
+fn a_sheet_can_be_pinned_before_the_mac_has_ever_received_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let (_host_dir, host) = test_host();
+    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
+    save_snapshot(
+        &server,
+        &snapshot_body(2, r#""page": { "id": "already-here", "title": "Here" },"#),
+    );
+
+    let pinned = post_json(&server, "pin", r#"{"pageId":"not-yet-drawn"}"#);
+
+    assert!(
+        pinned.starts_with("HTTP/1.1 200 OK"),
+        "pinning an unsent sheet was refused: {pinned}"
+    );
+    // Nothing to mirror yet, so the agent keeps reading what it was reading.
+    assert_eq!(
+        latest_page_id(directory.path()).as_deref(),
+        Some("already-here")
+    );
+
+    // The pin also has to hold: another sheet arriving must not steal latest.*.
+    save_snapshot(
+        &server,
+        &snapshot_body(2, r#""page": { "id": "already-here", "title": "Here" },"#),
+    );
+    assert_eq!(
+        latest_page_id(directory.path()).as_deref(),
+        Some("already-here"),
+        "an unpinned sheet took latest.* while another sheet was pinned"
+    );
+
+    // And the moment the pinned sheet arrives, it becomes what the agent reads.
+    save_snapshot(
+        &server,
+        &snapshot_body(2, r#""page": { "id": "not-yet-drawn", "title": "Arrived" },"#),
+    );
+    assert_eq!(
+        latest_page_id(directory.path()).as_deref(),
+        Some("not-yet-drawn")
+    );
+}

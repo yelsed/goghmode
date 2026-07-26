@@ -30,13 +30,20 @@ const SUPPORTED_SCHEMA_VERSIONS: [u8; 2] = [1, 2];
 /// from a rejection. An older host has no such route and answers 404, which is
 /// a usable answer.
 const CAPABILITIES: &[u8] =
-    br#"{"schemaVersions":[1,2],"features":["pages","pairing-v2"]}"#;
+    br#"{"schemaVersions":[1,2],"features":["pages","pin","promote","pairing-v2"]}"#;
 
 pub const DEFAULT_PORT: u16 = 8787;
 
 /// Everything a request needs to be answered. The paired-device routes live
 /// outside the token prefix — a device authenticates by signature, so the path
 /// secret has no part to play there.
+#[derive(Clone, Copy)]
+enum LegacyWrite {
+    Save,
+    Pin,
+    Promote,
+}
+
 struct ServerContext {
     route_prefix: String,
     drawings_dir: PathBuf,
@@ -206,10 +213,20 @@ fn handle_connection(stream: &mut TcpStream, context: &ServerContext, peer: Sock
     }
 
     if request.method == "POST" {
-        if path == format!("{route_prefix}save") {
-            // Once a device has been paired, the anonymous door closes. Leaving
-            // it open would mean an authenticated route sitting beside an
-            // unauthenticated one writing to the same drawings directory.
+        let legacy_route = [
+            (format!("{route_prefix}save"), LegacyWrite::Save),
+            (format!("{route_prefix}pin"), LegacyWrite::Pin),
+            (format!("{route_prefix}promote"), LegacyWrite::Promote),
+        ]
+        .into_iter()
+        .find(|(candidate, _)| candidate == path)
+        .map(|(_, route)| route);
+
+        if let Some(route) = legacy_route {
+            // Once a device has been paired, the anonymous door closes — for
+            // every write, not only the drawing. `pin` names the sheet the agent
+            // reads, so an unauthenticated pin is a way to choose what the agent
+            // sees without ever sending a stroke.
             if !context.host.legacy_uploads_enabled() {
                 write_response(
                     stream,
@@ -220,7 +237,13 @@ fn handle_connection(stream: &mut TcpStream, context: &ServerContext, peer: Sock
                 );
                 return;
             }
-            handle_save_request(stream, drawings_dir, &request.body);
+            match route {
+                LegacyWrite::Save => handle_save_request(stream, drawings_dir, &request.body),
+                LegacyWrite::Pin => handle_pin_request(stream, drawings_dir, &request.body),
+                LegacyWrite::Promote => {
+                    handle_promote_request(stream, drawings_dir, &request.body)
+                }
+            }
         } else {
             write_response(
                 stream,
@@ -293,6 +316,10 @@ fn handle_paired_route(
         ("GET", "/v2/hello") | ("HEAD", "/v2/hello") => handle_hello(stream, context, request),
         ("POST", "/v2/pair") => handle_pair(stream, context, request, peer),
         ("POST", "/v2/save") => handle_authenticated_save(stream, context, request),
+        ("POST", "/v2/pin") => handle_authenticated_stamp(stream, context, request, Stamp::Pin),
+        ("POST", "/v2/promote") => {
+            handle_authenticated_stamp(stream, context, request, Stamp::Promote)
+        }
         ("GET", _) | ("HEAD", _) | ("POST", _) => write_response(
             stream,
             404,
@@ -323,7 +350,7 @@ fn handle_hello(stream: &mut TcpStream, context: &ServerContext, request: &HttpR
     let mut body = serde_json::json!({
         "v": PROTOCOL_VERSION,
         "schemaVersions": SUPPORTED_SCHEMA_VERSIONS,
-        "features": ["pages", "pairing-v2"],
+        "features": ["pages", "pin", "promote", "pairing-v2"],
         "time": unix_millis().to_string(),
     });
 
@@ -470,6 +497,76 @@ fn handle_authenticated_save(
             500,
             "Internal Server Error",
             "could not write the drawing".to_owned(),
+        ),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Stamp {
+    Pin,
+    Promote,
+}
+
+/// Choosing which sheet the agent reads is as consequential as sending one, so
+/// it goes through exactly the same door: signed, replay-protected, and
+/// answered with a proof of who answered.
+fn handle_authenticated_stamp(
+    stream: &mut TcpStream,
+    context: &ServerContext,
+    request: &HttpRequest,
+    stamp: Stamp,
+) {
+    let Some(device) = authenticate(context, request) else {
+        write_response(
+            stream,
+            401,
+            "Unauthorized",
+            "text/plain; charset=utf-8",
+            b"Unauthorized",
+        );
+        return;
+    };
+
+    let page_id = match page_id_request(&request.body) {
+        Ok(page_id) => page_id,
+        Err(reason) => {
+            respond_to_device(stream, &device, 400, "Bad Request", reason);
+            return;
+        }
+    };
+
+    let outcome = match (stamp, page_id) {
+        (Stamp::Pin, page_id) => crate::pages::set_pin(&context.drawings_dir, page_id.as_deref()),
+        (Stamp::Promote, Some(page_id)) => {
+            crate::pages::promote_page(&context.drawings_dir, &page_id).map(|_| ())
+        }
+        (Stamp::Promote, None) => {
+            respond_to_device(
+                stream,
+                &device,
+                400,
+                "Bad Request",
+                "promote needs a pageId".to_owned(),
+            );
+            return;
+        }
+    };
+
+    match outcome {
+        Ok(()) => write_response_with_headers(
+            stream,
+            200,
+            "OK",
+            "application/json; charset=utf-8",
+            br#"{"ok":true}"#,
+            &host_proof(&device, 200),
+        ),
+        Err(error) => respond_to_device(
+            stream,
+            &device,
+            400,
+            "Bad Request",
+            format!("could not stamp that sheet: {error}"),
         ),
     }
 }
@@ -664,6 +761,72 @@ fn handle_save_request(stream: &mut TcpStream, drawings_dir: &Path, body: &[u8])
             "text/plain; charset=utf-8",
             b"Internal Server Error",
         ),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct PageIdRequest {
+    #[serde(rename = "pageId")]
+    page_id: Option<String>,
+}
+
+fn page_id_request(body: &[u8]) -> Result<Option<String>, String> {
+    let request: PageIdRequest = serde_json::from_slice(body)
+        .map_err(|error| format!("could not parse the request: {error}"))?;
+    match request.page_id {
+        Some(page_id) if !page_id_is_safe(&page_id) => Err(format!(
+            "page id {page_id:?} is not usable as a folder name (letters, digits, - and _ only, up to 64)"
+        )),
+        page_id => Ok(page_id),
+    }
+}
+
+/// Pins the page `latest.*` follows, or clears the pin with a null id. Without a
+/// pin, `latest.*` keeps following whatever was written last.
+fn handle_pin_request(stream: &mut TcpStream, drawings_dir: &Path, body: &[u8]) {
+    let page_id = match page_id_request(body) {
+        Ok(page_id) => page_id,
+        Err(reason) => {
+            reject_owned(stream, reason);
+            return;
+        }
+    };
+
+    match crate::pages::set_pin(drawings_dir, page_id.as_deref()) {
+        Ok(()) => write_response(
+            stream,
+            200,
+            "OK",
+            "application/json; charset=utf-8",
+            br#"{"ok":true}"#,
+        ),
+        Err(error) => reject_owned(stream, format!("could not pin that page: {error}")),
+    }
+}
+
+/// Points `latest.*` at one stored page without moving the pin.
+fn handle_promote_request(stream: &mut TcpStream, drawings_dir: &Path, body: &[u8]) {
+    let page_id = match page_id_request(body) {
+        Ok(Some(page_id)) => page_id,
+        Ok(None) => {
+            reject_owned(stream, "promote needs a pageId".to_owned());
+            return;
+        }
+        Err(reason) => {
+            reject_owned(stream, reason);
+            return;
+        }
+    };
+
+    match crate::pages::promote_page(drawings_dir, &page_id) {
+        Ok(_) => write_response(
+            stream,
+            200,
+            "OK",
+            "application/json; charset=utf-8",
+            br#"{"ok":true}"#,
+        ),
+        Err(error) => reject_owned(stream, format!("could not send that page: {error}")),
     }
 }
 

@@ -616,3 +616,87 @@ fn hello_tells_a_stranger_nothing_that_identifies_the_machine() {
     let signed = request(&base, "GET", "/v2/hello", &headers, "");
     assert!(signed.body.contains(&host_id));
 }
+
+/// The merge with the drawing-set work brought two new writes on the legacy
+/// prefix. `pin` names the sheet the agent reads, so leaving it anonymous while
+/// `save` is closed would guard the drawing and leave the pointer to it open.
+#[test]
+fn pairing_closes_the_anonymous_stamp_routes_too() {
+    let harness = fixture();
+    let base = harness.server.base_url();
+    let prefix = {
+        let url = harness.server.url();
+        let (_, rest) = url.split_once("://").unwrap();
+        let slash = rest.find('/').unwrap();
+        rest[slash..].to_owned()
+    };
+    let body = snapshot_json("browser-page");
+    let stamp_body = r#"{"pageId":"browser-page"}"#;
+
+    assert_eq!(
+        request(&base, "POST", &format!("{prefix}save"), &[], &body).status,
+        200
+    );
+    assert_eq!(
+        request(&base, "POST", &format!("{prefix}pin"), &[], stamp_body).status,
+        200,
+        "the old stamp routes work until a device pairs"
+    );
+
+    pair(&base, &harness.host, DEVICE_ID);
+
+    for route in ["pin", "promote"] {
+        let response = request(&base, "POST", &format!("{prefix}{route}"), &[], stamp_body);
+        assert_eq!(
+            response.status, 403,
+            "{route} must close with the rest of the anonymous door"
+        );
+    }
+}
+
+#[test]
+fn a_paired_device_can_stamp_but_an_unsigned_caller_cannot() {
+    let harness = fixture();
+    let base = harness.server.base_url();
+    let secret = pair(&base, &harness.host, DEVICE_ID);
+    let host_id = harness.host.host_id();
+    let body = snapshot_json("page-one");
+
+    assert_eq!(
+        upload(&base, &secret, DEVICE_ID, &host_id, unix_millis(), "n1", &body).status,
+        200
+    );
+
+    let stamp_body = r#"{"pageId":"page-one"}"#;
+    let signed = signed_upload_headers(
+        &secret,
+        DEVICE_ID,
+        &host_id,
+        unix_millis(),
+        "n2",
+        stamp_body,
+    );
+    let pinned = request(&base, "POST", "/v2/pin", &signed, stamp_body);
+    assert_eq!(pinned.status, 200);
+    assert_eq!(
+        pinned.header("x-goghmode-host-mac"),
+        Some(response_mac(&secret, "n2", 200).as_str()),
+        "a stamp is as consequential as a drawing, so it is proved the same way"
+    );
+
+    let unsigned = request(&base, "POST", "/v2/pin", &[], stamp_body);
+    assert_eq!(unsigned.status, 401);
+
+    let promoted = signed_upload_headers(
+        &secret,
+        DEVICE_ID,
+        &host_id,
+        unix_millis(),
+        "n3",
+        stamp_body,
+    );
+    assert_eq!(
+        request(&base, "POST", "/v2/promote", &promoted, stamp_body).status,
+        200
+    );
+}
