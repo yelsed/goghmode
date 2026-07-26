@@ -93,6 +93,21 @@ final class UploadController: ObservableObject {
         }
     }
 
+    /// Sends a sheet and waits for the Mac to have it. Stamping cannot fire and
+    /// forget: the Mac can only mirror a page it actually holds.
+    @discardableResult
+    func send(_ snapshot: DrawingSnapshot, endpointText: String) async -> Bool {
+        remember(snapshot, endpointText)
+        pendingUpload?.cancel()
+        do {
+            try await upload(snapshot, endpointText: endpointText, client: client)
+            return true
+        } catch {
+            status = .failed(guidance(for: error))
+            return false
+        }
+    }
+
     /// Re-sends the last drawing. Without this the status stays `Offline` forever
     /// once an upload fails, because nothing retries until the drawing changes —
     /// so quitting and reopening the Mac app looked like a permanent failure.
@@ -121,7 +136,11 @@ final class UploadController: ObservableObject {
         if let known = capabilitiesByEndpoint[endpointText] {
             return known
         }
-        let capabilities = await client.capabilities(of: endpoint)
+        guard let capabilities = await client.capabilities(of: endpoint) else {
+            // Unreachable, not old. Nothing is cached and nothing is concluded, so
+            // the next attempt asks again instead of inheriting a guess.
+            return .assumeCurrent
+        }
         capabilitiesByEndpoint[endpointText] = capabilities
         pagesSupported = capabilities.supportsPages
         pinningSupported = capabilities.supportsPinning
@@ -235,6 +254,15 @@ final class UploadController: ObservableObject {
             // reachable. One retry separates a dead socket from a dead server.
             try await Task.sleep(for: .milliseconds(300))
             try await client.upload(outgoing, to: endpoint)
+        }
+
+        // A save that lands is the strongest evidence there is: the Mac is reachable,
+        // and if it took a page it understands pages. Any standing complaint about it
+        // is now out of date, so it goes rather than waiting to be re-probed.
+        if outgoing.page != nil, !pagesSupported {
+            pagesSupported = true
+            capabilitiesByEndpoint.removeValue(forKey: endpointText)
+            macIsKnown = false
         }
         status = .saved(Date())
     }

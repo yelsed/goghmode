@@ -536,3 +536,50 @@ fn capabilities_advertise_pin_and_promote_so_an_older_mac_is_distinguishable() {
     assert!(response.contains("\"pin\""));
     assert!(response.contains("\"promote\""));
 }
+
+/// Stamping a sheet the Mac has never received used to fail with a 400, because
+/// pinning tried to promote a page that was not on disk. A pin is a declaration
+/// about which page `latest.*` follows, so it has to survive naming a page that has
+/// not arrived yet — and take effect the moment it does.
+#[test]
+fn a_sheet_can_be_pinned_before_the_mac_has_ever_received_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path()).unwrap();
+    save_snapshot(
+        &server,
+        &snapshot_body(2, r#""page": { "id": "already-here", "title": "Here" },"#),
+    );
+
+    let pinned = post_json(&server, "pin", r#"{"pageId":"not-yet-drawn"}"#);
+
+    assert!(
+        pinned.starts_with("HTTP/1.1 200 OK"),
+        "pinning an unsent sheet was refused: {pinned}"
+    );
+    // Nothing to mirror yet, so the agent keeps reading what it was reading.
+    assert_eq!(
+        latest_page_id(directory.path()).as_deref(),
+        Some("already-here")
+    );
+
+    // The pin also has to hold: another sheet arriving must not steal latest.*.
+    save_snapshot(
+        &server,
+        &snapshot_body(2, r#""page": { "id": "already-here", "title": "Here" },"#),
+    );
+    assert_eq!(
+        latest_page_id(directory.path()).as_deref(),
+        Some("already-here"),
+        "an unpinned sheet took latest.* while another sheet was pinned"
+    );
+
+    // And the moment the pinned sheet arrives, it becomes what the agent reads.
+    save_snapshot(
+        &server,
+        &snapshot_body(2, r#""page": { "id": "not-yet-drawn", "title": "Arrived" },"#),
+    );
+    assert_eq!(
+        latest_page_id(directory.path()).as_deref(),
+        Some("not-yet-drawn")
+    );
+}

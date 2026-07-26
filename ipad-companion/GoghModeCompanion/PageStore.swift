@@ -21,6 +21,24 @@ struct NotebookPage: Codable, Equatable, Identifiable {
     var pageRef: PageRef {
         PageRef(id: id, title: title)
     }
+
+    /// The sheet as the wire format sees it, for sending a page the canvas does not
+    /// currently have open.
+    ///
+    /// A page's canvas size is not stored, so it is derived the way the preview
+    /// derives its source rect: a full page, grown to cover anything drawn past it.
+    /// A fixed portrait canvas would clamp every stroke made in landscape onto the
+    /// right-hand edge, because the Mac rejects points outside the canvas.
+    var snapshot: DrawingSnapshot {
+        let pencilDrawing = drawing
+        let bounds = pencilDrawing.bounds
+        let unusable = bounds.isNull || bounds.isInfinite || bounds.isEmpty
+        let canvas = CGSize(
+            width: unusable ? 1024 : max(1024, bounds.maxX),
+            height: unusable ? 1366 : max(1366, bounds.maxY)
+        )
+        return DrawingSnapshot.fromPencilDrawing(pencilDrawing, canvasSize: canvas, page: pageRef)
+    }
 }
 
 /// A stack, in drawing-set terms: a lettered series of sheets. Series live only

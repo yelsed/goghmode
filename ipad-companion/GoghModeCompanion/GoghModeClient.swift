@@ -59,6 +59,14 @@ struct GoghModeCapabilities: Codable, Equatable {
         features: []
     )
 
+    /// What to assume when the Mac could not be asked. Optimism is right here: the
+    /// save that follows is the real test, and it reports its own failure. Assuming
+    /// the worst instead turns one dropped probe into a standing complaint.
+    static let assumeCurrent = GoghModeCapabilities(
+        schemaVersions: [pagelessSchemaVersion, currentSchemaVersion],
+        features: ["pages", "pin", "promote"]
+    )
+
     var supportsPages: Bool {
         schemaVersions.contains(currentSchemaVersion)
     }
@@ -73,17 +81,23 @@ struct GoghModeCapabilities: Codable, Equatable {
 struct GoghModeClient {
     var session: URLSession = .shared
 
-    /// Asks the Mac what it accepts. Probing beats inferring from a rejection:
-    /// a 404 here is an old Mac, and anything else unreadable is treated the
-    /// same way, so the drawing still gets through as version 1.
-    func capabilities(of endpoint: GoghModeEndpoint) async -> GoghModeCapabilities {
+    /// Asks the Mac what it accepts. Probing beats inferring from a rejection: a 404
+    /// here is a Mac from before pages, so the drawing still gets through as
+    /// version 1.
+    ///
+    /// Returns `nil` when the Mac could not be asked at all. A timeout or a dropped
+    /// socket is not evidence of an old Mac, and treating it as one switched pages
+    /// and stamping off until the app was restarted — a complaint that outlived
+    /// every successful save after it.
+    func capabilities(of endpoint: GoghModeEndpoint) async -> GoghModeCapabilities? {
         guard let (data, response) = try? await session.data(from: endpoint.capabilitiesURL),
-              let httpResponse = response as? HTTPURLResponse,
-              (200..<300).contains(httpResponse.statusCode),
-              let capabilities = try? JSONDecoder().decode(GoghModeCapabilities.self, from: data) else {
+              let httpResponse = response as? HTTPURLResponse else {
+            return nil
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
             return .pagelessMac
         }
-        return capabilities
+        return (try? JSONDecoder().decode(GoghModeCapabilities.self, from: data)) ?? .pagelessMac
     }
 
     /// Stamps a page as the one `latest.*` follows, or clears the stamp with

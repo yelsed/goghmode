@@ -234,6 +234,12 @@ struct CanvasView: View {
 
         stamping = true
         Task {
+            // Sent before pinned, so the Mac is holding this sheet by the time it is
+            // told to follow it.
+            if target != nil {
+                await uploader.send(snapshot(of: drawing), endpointText: endpointText)
+            }
+
             let accepted = await uploader.pin(target, endpointText: endpointText)
             stamping = false
             if accepted {

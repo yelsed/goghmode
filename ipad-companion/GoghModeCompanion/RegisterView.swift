@@ -256,6 +256,14 @@ struct RegisterView: View {
 
         stamping.insert(page.id)
         Task {
+            // The sheet goes up before the pin does. The Mac cannot mirror a page it
+            // has never received, so stamping straight from the register — a sheet
+            // the canvas has not had open since the Mac last saw it — would otherwise
+            // leave the agent reading something else.
+            if target != nil {
+                await uploader.send(page.snapshot, endpointText: endpointText)
+            }
+
             let accepted = await uploader.pin(target, endpointText: endpointText)
             stamping.remove(page.id)
             if accepted {

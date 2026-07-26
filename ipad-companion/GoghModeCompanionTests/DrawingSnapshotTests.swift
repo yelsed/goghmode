@@ -331,6 +331,24 @@ final class DrawingSnapshotTests: XCTestCase {
         }
     }
 
+    /// A probe that could not complete says nothing about the Mac. Reading it as "old
+    /// Mac" cached that verdict, so one dropped request switched pages and stamping
+    /// off and left the complaint on screen until the app was restarted.
+    @MainActor
+    func testAnUnreachableMacIsNotRecordedAsAnOldOne() async {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [UnreachableMacProtocol.self]
+        let controller = UploadController(
+            client: GoghModeClient(session: URLSession(configuration: configuration))
+        )
+
+        _ = await controller.pin("note-1", endpointText: "http://10.0.0.1:8787/abc123/")
+
+        XCTAssertTrue(controller.pagesSupported)
+        XCTAssertTrue(controller.pinningSupported)
+        XCTAssertFalse(controller.macIsKnown, "a failed probe must not count as an answer")
+    }
+
     @MainActor
     private func temporaryStoreURL() -> URL {
         FileManager.default.temporaryDirectory
@@ -360,6 +378,20 @@ final class PagelessMacProtocol: URLProtocol {
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(#"{"schemaVersions":[1,2],"features":["pages"]}"#.utf8))
         client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}
+
+/// A Mac that cannot be reached at all — the probe fails at the network level rather
+/// than answering 404.
+final class UnreachableMacProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        client?.urlProtocol(self, didFailWithError: URLError(.cannotConnectToHost))
     }
 
     override func stopLoading() {}

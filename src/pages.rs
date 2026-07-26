@@ -179,8 +179,17 @@ pub fn set_pin(drawings_dir: impl AsRef<Path>, page_id: Option<&str>) -> anyhow:
     // The index carries the pin, so it is stale the moment the pin moves.
     rebuild_index(drawings_dir)?;
 
+    // A pin declares which page `latest.*` follows, so it may name a page this Mac
+    // has not received yet — a sheet created on the iPad and stamped before anything
+    // was drawn on it. `write_page` honours the pin the moment that page arrives.
+    // Refusing here made stamping such a sheet fail with a 400.
     if let Some(page_id) = page_id {
-        promote_page(drawings_dir, page_id)?;
+        if page_dir(drawings_dir, page_id)
+            .join(format!("{PAGE_STEM}.json"))
+            .exists()
+        {
+            promote_page(drawings_dir, page_id)?;
+        }
     }
     Ok(())
 }
