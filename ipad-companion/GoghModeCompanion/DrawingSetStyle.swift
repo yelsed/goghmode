@@ -82,7 +82,7 @@ struct BlockLabel: View {
 
     var body: some View {
         Text(text.uppercased())
-            .font(.system(size: 10, weight: .semibold))
+            .font(.caption2.weight(.semibold))
             .tracking(0.8)
             .foregroundStyle(Sheet.inkLabel)
             .lineLimit(1)
@@ -96,7 +96,7 @@ struct SheetNumber: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 12, weight: .medium, design: .monospaced))
+            .font(.caption.monospaced().weight(.medium))
             .foregroundStyle(Sheet.inkSecondary)
             .lineLimit(1)
     }
@@ -131,6 +131,9 @@ struct TitleBlock: View {
                 .fill(Sheet.rule)
                 .frame(height: Sheet.hair)
 
+            // Two rows of cells rather than one, the way a real title block
+            // stacks them — and the only way NAME keeps a readable width once
+            // DATE and STROKES have their own cells.
             HStack(spacing: 0) {
                 BlockField(label: "Sheet") {
                     SheetNumber(text: number)
@@ -141,23 +144,35 @@ struct TitleBlock: View {
 
                 BlockField(label: "Name") {
                     Text(name)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Sheet.ink)
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
                 .padding(.horizontal, Sheet.block)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+
+            Rectangle()
+                .fill(Sheet.ruleHair)
+                .frame(height: Sheet.hair)
+
+            HStack(spacing: 0) {
+                BlockField(label: "Date") {
+                    SheetNumber(text: date)
+                }
+                .frame(width: 62, alignment: .leading)
 
                 cellRule
 
                 BlockField(label: "Strokes") {
                     SheetNumber(text: String(strokes))
                 }
-                .frame(width: 54, alignment: .leading)
                 .padding(.leading, Sheet.block)
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 7)
+            .padding(.vertical, 6)
         }
         .background(Sheet.paper)
     }
@@ -178,9 +193,14 @@ struct IssueStamp: View {
     var tint: Color = Sheet.stamp
     var scale: CGFloat = 1
 
+    /// The stamp is a graphic whose proportions matter, so it cannot simply take
+    /// a text style — but it still has to grow with the reading size, or it
+    /// becomes the one thing on the sheet a larger-type user cannot read.
+    @ScaledMetric(relativeTo: .footnote) private var baseSize: CGFloat = 13
+
     var body: some View {
         Text(text.uppercased())
-            .font(.system(size: 13 * scale, weight: .heavy))
+            .font(.system(size: baseSize * scale, weight: .heavy))
             .tracking(1.3 * scale)
             .foregroundStyle(tint)
             .padding(.horizontal, 10 * scale)

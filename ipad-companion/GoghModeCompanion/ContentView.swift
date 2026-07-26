@@ -100,7 +100,7 @@ struct ContentView: View {
 
             if let message = uploader.pagesUnsupportedMessage {
                 Text(message)
-                    .font(.system(size: 13))
+                    .font(.footnote)
                     .foregroundStyle(Sheet.onGround)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 16)
@@ -146,12 +146,12 @@ struct ContentView: View {
                             if let page = pageStore.selectedPage {
                                 SheetNumber(text: pageStore.sheetNumber(for: page))
                                 Text(page.title)
-                                    .font(.system(size: 15, weight: .semibold))
+                                    .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(Sheet.onGround)
                                     .lineLimit(1)
                             }
                             Image(systemName: "chevron.down")
-                                .font(.system(size: 11, weight: .semibold))
+                                .font(.caption2.weight(.semibold))
                                 .foregroundStyle(Sheet.onGroundSecondary)
                         }
                         .frame(minHeight: 44)
@@ -188,7 +188,7 @@ struct ContentView: View {
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.callout.weight(.semibold))
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }
@@ -213,12 +213,12 @@ struct StatusBadge: View {
                     .fill(tint)
                     .frame(width: 8, height: 8)
                 Text(status.label.uppercased())
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.caption2.weight(.semibold))
                     .tracking(0.8)
                     .foregroundStyle(Sheet.onGround)
                 if case .failed(let message) = status {
                     Text(message)
-                        .font(.system(size: 12))
+                        .font(.caption)
                         .foregroundStyle(Sheet.onGroundSecondary)
                         .lineLimit(1)
                 }
@@ -253,10 +253,10 @@ struct SetupView: View {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("GoghMode")
-                        .font(.system(size: 34, weight: .bold))
+                        .font(.largeTitle.weight(.bold))
                         .foregroundStyle(Sheet.onGround)
                     Text("Write here. The Mac keeps every sheet, and Claude reads the one you stamp.")
-                        .font(.system(size: 16))
+                        .font(.callout)
                         .foregroundStyle(Sheet.onGroundSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -268,7 +268,7 @@ struct SetupView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         BlockLabel(text: "Mac address")
                         TextField("http://192.168.1.10:8787/token/", text: $endpointText)
-                            .font(.system(size: 16, design: .monospaced))
+                            .font(.callout.monospaced())
                             .foregroundStyle(Sheet.ink)
                             .keyboardType(.URL)
                             .textInputAutocapitalization(.never)
@@ -277,7 +277,7 @@ struct SetupView: View {
 
                         if !endpointText.isEmpty && !isValid {
                             Text("That is not a full address. Copy the mobile URL from the Mac — it starts with http:// and ends in a token.")
-                                .font(.system(size: 13))
+                                .font(.footnote)
                                 .foregroundStyle(Sheet.stamp)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -290,13 +290,13 @@ struct SetupView: View {
                 }
 
                 Text("Open GoghMode on the Mac and press Copy mobile URL.")
-                    .font(.system(size: 14))
+                    .font(.subheadline)
                     .foregroundStyle(Sheet.onGroundSecondary)
                     .padding(.top, 12)
 
                 Button(action: onDone) {
                     Text(isValid ? "Open the notebook" : "Waiting for an address")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.callout.weight(.semibold))
                         .frame(maxWidth: .infinity)
                         .frame(height: 50)
                         .background(isValid ? Sheet.ink : Sheet.edge)

@@ -20,7 +20,10 @@ struct RegisterView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                if store.pages.isEmpty {
+                // The store always holds at least one sheet, so "no sheets" is
+                // never literally true — the real empty state is a set nothing
+                // has been drawn on yet.
+                if store.pages.allSatisfy(\.isEmpty) {
                     EmptyRegister()
                         .padding(.top, 80)
                 } else {
@@ -77,19 +80,19 @@ struct RegisterView: View {
                 BlockLabel(text: "Claude reads")
                 if let pinned = store.pinnedPage {
                     Text(pinned.title)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.footnote.weight(.semibold))
                         .foregroundStyle(Sheet.onGround)
                         .lineLimit(1)
                     SheetNumber(text: store.sheetNumber(for: pinned))
                 } else {
                     Text("whichever sheet you drew on last")
-                        .font(.system(size: 13))
+                        .font(.footnote)
                         .foregroundStyle(Sheet.onGroundSecondary)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
                 Text("\(store.pages.count) sheets")
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .font(.caption.monospaced().weight(.medium))
                     .foregroundStyle(Sheet.onGroundSecondary)
             }
             .padding(.horizontal, Sheet.margin)
@@ -243,6 +246,8 @@ struct SheetCard: View {
     let number: String
     let isIssued: Bool
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         VStack(spacing: 0) {
             SheetThumbnail(drawing: page.drawing)
@@ -251,7 +256,13 @@ struct SheetCard: View {
                     if isIssued {
                         IssueStamp()
                             .padding(10)
-                            .transition(.scale(scale: 1.25).combined(with: .opacity))
+                            // The stamp lands with a short impact settle. Under
+                            // Reduce Motion it simply appears.
+                            .transition(
+                                reduceMotion
+                                    ? .opacity
+                                    : .scale(scale: 1.25).combined(with: .opacity)
+                            )
                     }
                 }
 
@@ -268,7 +279,10 @@ struct SheetCard: View {
             RoundedRectangle(cornerRadius: Sheet.sheetRadius)
                 .strokeBorder(isIssued ? Sheet.stamp.opacity(0.55) : Sheet.edge, lineWidth: Sheet.hair)
         }
-        .animation(.spring(response: 0.28, dampingFraction: 0.62), value: isIssued)
+        .animation(
+            reduceMotion ? .easeInOut(duration: 0.15) : .spring(response: 0.28, dampingFraction: 0.62),
+            value: isIssued
+        )
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
             Text(
@@ -322,7 +336,7 @@ struct SeriesCard: View {
 
                     BlockField(label: "Name") {
                         Text(series.name)
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(.subheadline.weight(.semibold))
                             .foregroundStyle(Sheet.ink)
                             .lineLimit(1)
                     }
@@ -444,10 +458,10 @@ struct EmptyRegister: View {
             }
 
             Text("No sheets yet")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.headline)
                 .foregroundStyle(Sheet.onGround)
             Text("Draw, and the sheet files itself here.")
-                .font(.system(size: 14))
+                .font(.subheadline)
                 .foregroundStyle(Sheet.onGroundSecondary)
         }
         .padding(Sheet.margin)

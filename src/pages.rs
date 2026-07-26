@@ -20,6 +20,11 @@ pub struct PageEntry {
     pub title: Option<String>,
     #[serde(rename = "updatedAt")]
     pub updated_at: u128,
+    /// When the page directory first appeared. Taken from the filesystem rather
+    /// than the snapshot, so sheet numbers stay put instead of reshuffling every
+    /// time some other sheet is edited.
+    #[serde(rename = "createdAt")]
+    pub created_at: u128,
     #[serde(rename = "strokeCount")]
     pub stroke_count: usize,
     pub files: PageEntryFiles,
@@ -230,6 +235,7 @@ pub fn list_pages(drawings_dir: impl AsRef<Path>) -> Vec<PageEntry> {
             Some(PageEntry {
                 title: stored.page.as_ref().and_then(|page| page.title.clone()),
                 updated_at: stored.updated_at,
+                created_at: directory_created_at(&entry.path()).unwrap_or(stored.updated_at),
                 stroke_count: stored.strokes.len(),
                 files: PageEntryFiles {
                     json: format!("drawings/{PAGES_DIRECTORY}/{page_id}/{PAGE_STEM}.json"),
@@ -262,6 +268,33 @@ pub fn load_page_snapshot(
     read_stored_page(&path)
         .map(StoredPage::into_snapshot)
         .ok_or_else(|| anyhow::anyhow!("Could not read {}", path.display()))
+}
+
+/// Creation time of a page directory, in unix milliseconds. Not every platform
+/// records one; callers fall back to the last write.
+fn directory_created_at(path: &Path) -> Option<u128> {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.created())
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|since_epoch| since_epoch.as_millis())
+}
+
+/// Sheet numbers in creation order, so a number belongs to a sheet for as long
+/// as the sheet exists.
+pub fn sheet_numbers(pages: &[PageEntry]) -> std::collections::HashMap<String, usize> {
+    let mut ordered: Vec<&PageEntry> = pages.iter().collect();
+    ordered.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.page_id.cmp(&right.page_id))
+    });
+    ordered
+        .into_iter()
+        .enumerate()
+        .map(|(index, page)| (page.page_id.clone(), index + 1))
+        .collect()
 }
 
 fn read_stored_page(path: &Path) -> Option<StoredPage> {

@@ -192,3 +192,36 @@ fn snapshot_to_rgba_matches_canvas_dimensions_and_draws_dark_pixels() {
         .pixels()
         .any(|pixel| pixel.0[0] < 64 && pixel.0[1] < 64 && pixel.0[2] < 64));
 }
+
+#[test]
+fn sheet_numbers_follow_creation_order_not_the_order_pages_were_last_edited() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut drawing = Drawing::new(40.0, 40.0);
+    drawing.begin_stroke(2.0, 2.0, 0.5, 1);
+    drawing.push_point(20.0, 20.0, 0.5, 2);
+    drawing.finish_stroke();
+
+    let mut snapshot = drawing.snapshot();
+    for page_id in ["first", "second", "third"] {
+        snapshot.page = Some(drawing::PageRef {
+            id: page_id.to_owned(),
+            title: None,
+        });
+        pages::write_page(&snapshot, temp.path()).unwrap();
+    }
+
+    let before = pages::sheet_numbers(&list_pages(temp.path()));
+
+    // Editing the oldest page moves it to the top of the register; its sheet
+    // number must not follow it, or every number on screen reshuffles whenever
+    // any sheet is touched.
+    snapshot.page = Some(drawing::PageRef {
+        id: "first".to_owned(),
+        title: None,
+    });
+    pages::write_page(&snapshot, temp.path()).unwrap();
+    let after = pages::sheet_numbers(&list_pages(temp.path()));
+
+    assert_eq!(before, after);
+    assert_eq!(before.len(), 3);
+}

@@ -10,7 +10,7 @@ use crate::drawing::{Drawing, Stroke};
 use crate::export::snapshot_to_rgba;
 use crate::mobile_server::{MobileServer, DEFAULT_PORT};
 use crate::pages::{
-    list_pages, pages_dir, promote_page, read_pin, set_pin, write_page, PageEntry,
+    list_pages, pages_dir, promote_page, read_pin, set_pin, sheet_numbers, write_page, PageEntry,
 };
 use crate::prompt::{prompt_text, PromptTarget};
 
@@ -379,6 +379,7 @@ impl GoghModeApp {
 
         let pages = self.pages.clone();
         let pinned = self.pinned_page_id.clone();
+        let numbers = sheet_numbers(&pages);
         let columns = ((ui.available_width() / (THUMBNAIL_WIDTH as f32 + 24.0)).floor() as usize)
             .clamp(1, 6);
         let mut stamping = None;
@@ -391,7 +392,8 @@ impl GoghModeApp {
                     for (index, page) in pages.iter().enumerate() {
                         let thumbnail = self.thumbnail_for(ui.ctx(), page);
                         let issued = pinned.as_deref() == Some(page.page_id.as_str());
-                        let action = draw_sheet_card(ui, page, thumbnail, issued, index + 1);
+                        let number = numbers.get(&page.page_id).copied().unwrap_or(index + 1);
+                        let action = draw_sheet_card(ui, page, thumbnail, issued, number);
                         match action {
                             SheetAction::Stamp => {
                                 stamping = Some(if issued {
