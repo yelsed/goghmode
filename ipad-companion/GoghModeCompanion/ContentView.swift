@@ -6,21 +6,19 @@ struct ContentView: View {
     @AppStorage("goghModeEndpoint") private var endpointText = ""
     @StateObject private var uploader = UploadController()
     @StateObject private var pageStore = PageStore()
+    @StateObject private var hostStore = HostStore()
     @State private var drawing = PKDrawing()
     @State private var canvasSize = CGSize(width: 1024, height: 1366)
     @State private var clearSignal = 0
     @State private var showingSettings = false
     @State private var showingPages = false
-
-    private var endpoint: GoghModeEndpoint? {
-        GoghModeEndpoint(endpointText)
-    }
+    @State private var showingHosts = false
 
     var body: some View {
         ZStack {
             Color.white.ignoresSafeArea()
 
-            if endpoint == nil || showingSettings {
+            if hostStore.selectedHost == nil || showingSettings {
                 setupView
             } else {
                 drawingView
@@ -40,7 +38,22 @@ struct ContentView: View {
         }
         .onAppear {
             drawing = pageStore.selectedDrawing
+            // An endpoint saved by an older build becomes the first entry in the
+            // host list, so updating the app does not look like losing the
+            // connection.
+            hostStore.adoptLegacyEndpoint(endpointText)
         }
+    }
+
+    /// Resolves the destination once, so a host and a credential can never be
+    /// mixed up between two saved hosts.
+    private func destination() -> UploadController.Destination? {
+        guard let host = hostStore.selectedHost else { return nil }
+        return UploadController.Destination(
+            host: host,
+            secret: hostStore.secret(for: host.id),
+            deviceID: hostStore.deviceID
+        )
     }
 
     private func snapshot(of pencilDrawing: PKDrawing) -> DrawingSnapshot {
@@ -52,7 +65,8 @@ struct ContentView: View {
     }
 
     private func uploadCurrentPage() {
-        uploader.uploadNow(snapshot: snapshot(of: drawing), endpointText: endpointText)
+        guard let destination = destination() else { return }
+        uploader.uploadNow(snapshot: snapshot(of: drawing), to: destination)
     }
 
     private func switchTo(pageID: String) {
@@ -86,34 +100,22 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("GoghMode Companion")
                     .font(.largeTitle.bold())
-                Text("Paste the mobile URL from GoghMode on your desktop. The app will send your PencilKit drawing there as `drawings/latest.*`.")
+                Text("Open Devices in GoghMode on your desktop, tap Pair a device, and scan the code it shows. Your notes go to the host you choose — never to more than one.")
                     .font(.body)
                     .foregroundStyle(.secondary)
             }
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Desktop URL")
-                    .font(.headline)
-                TextField("http://192.168.1.10:8787/token/", text: $endpointText)
-                    .keyboardType(.URL)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .textFieldStyle(.roundedBorder)
-                if !endpointText.isEmpty && endpoint == nil {
-                    Text("Use the full mobile URL from the desktop app. It must start with http:// or https://.")
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                }
-            }
+            HostListView(hostStore: hostStore)
+                .frame(maxHeight: 320)
 
             Button {
                 showingSettings = false
             } label: {
-                Text(endpoint == nil ? "Waiting for valid URL" : "Open notebook")
+                Text(hostStore.selectedHost == nil ? "Pair a host to begin" : "Open notebook")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(endpoint == nil)
+            .disabled(hostStore.selectedHost == nil)
 
             Spacer()
         }
@@ -139,7 +141,9 @@ struct ContentView: View {
                 PencilCanvasView(drawing: $drawing, reloadSignal: $clearSignal) { newDrawing, newCanvasSize in
                     canvasSize = newCanvasSize == .zero ? geometry.size : newCanvasSize
                     pageStore.updateSelectedPage(with: newDrawing)
-                    uploader.schedule(snapshot: snapshot(of: newDrawing), endpointText: endpointText)
+                    if let destination = destination() {
+                        uploader.schedule(snapshot: snapshot(of: newDrawing), to: destination)
+                    }
                 }
                 .ignoresSafeArea(edges: .bottom)
                 .onAppear {
@@ -150,11 +154,38 @@ struct ContentView: View {
         .sheet(isPresented: $showingPages) {
             pageOverview
         }
+        .sheet(isPresented: $showingHosts) {
+            HostListView(hostStore: hostStore)
+        }
+    }
+
+    /// The destination, always on screen. With more than one host saved, the
+    /// question "where did that drawing go?" must never need asking.
+    private var hostChip: some View {
+        Button {
+            showingHosts = true
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: hostStore.selectedHost?.isPaired == true ? "lock.fill" : "link")
+                    .font(.caption)
+                Text(hostStore.selectedHost?.name ?? "No host")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                if hostStore.hosts.count > 1 {
+                    Image(systemName: "chevron.up.chevron.down").font(.caption2)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(.thinMaterial, in: Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     private var toolbar: some View {
         HStack(spacing: 12) {
             statusBadge
+            hostChip
 
             if uploader.pagesSupported {
                 Button {
@@ -187,13 +218,15 @@ struct ContentView: View {
                 drawing = PKDrawing()
                 clearSignal += 1
                 pageStore.updateSelectedPage(with: drawing)
-                uploader.uploadNow(
-                    snapshot: DrawingSnapshot.empty(
-                        canvasSize: canvasSize,
-                        page: pageStore.selectedPage?.pageRef
-                    ),
-                    endpointText: endpointText
-                )
+                if let destination = destination() {
+                    uploader.uploadNow(
+                        snapshot: DrawingSnapshot.empty(
+                            canvasSize: canvasSize,
+                            page: pageStore.selectedPage?.pageRef
+                        ),
+                        to: destination
+                    )
+                }
             }
             .buttonStyle(.bordered)
 
@@ -278,6 +311,12 @@ struct ContentView: View {
                         .lineLimit(1)
                         .foregroundStyle(.secondary)
                 }
+                if case .wrongHost(let message) = uploader.status {
+                    Text(message)
+                        .font(.caption)
+                        .lineLimit(2)
+                        .foregroundStyle(.red)
+                }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
@@ -294,6 +333,8 @@ struct ContentView: View {
         case .waiting, .saving:
             .orange
         case .failed:
+            .red
+        case .wrongHost:
             .red
         }
     }

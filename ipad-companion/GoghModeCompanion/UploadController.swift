@@ -9,6 +9,10 @@ final class UploadController: ObservableObject {
         case saving
         case saved(Date)
         case failed(String)
+        /// A machine answered but could not prove it is the paired host. Kept
+        /// apart from `failed` because "offline" invites a retry and this must
+        /// not be retried into.
+        case wrongHost(String)
 
         var label: String {
             switch self {
@@ -22,6 +26,8 @@ final class UploadController: ObservableObject {
                 "Saved"
             case .failed:
                 "Offline"
+            case .wrongHost:
+                "Wrong host"
             }
         }
     }
@@ -36,7 +42,17 @@ final class UploadController: ObservableObject {
     private var pendingUpload: Task<Void, Never>?
     private var lastSnapshot: DrawingSnapshot?
     private var lastEndpointText = ""
+    private var lastDestination: Destination?
     private var capabilitiesByEndpoint: [String: GoghModeCapabilities] = [:]
+
+    /// Where one drawing is going. Carrying the resolved host and its key
+    /// together means an upload can never be assembled from a host and somebody
+    /// else's credential.
+    struct Destination {
+        let host: SavedHost
+        let secret: String?
+        let deviceID: String
+    }
 
     var pagesUnsupportedMessage: String? {
         pagesSupported
@@ -45,6 +61,8 @@ final class UploadController: ObservableObject {
     }
 
     var canRetry: Bool {
+        // Deliberately not offered for `wrongHost`: retrying into a machine that
+        // could not prove itself is exactly what must not happen automatically.
         if case .failed = status {
             return lastSnapshot != nil
         }
@@ -55,8 +73,8 @@ final class UploadController: ObservableObject {
         self.client = client
     }
 
-    func schedule(snapshot: DrawingSnapshot, endpointText: String) {
-        remember(snapshot, endpointText)
+    func schedule(snapshot: DrawingSnapshot, to destination: Destination) {
+        remember(snapshot, destination)
         pendingUpload?.cancel()
         status = .waiting
 
@@ -64,23 +82,23 @@ final class UploadController: ObservableObject {
             do {
                 try await Task.sleep(for: .milliseconds(600))
                 try Task.checkCancellation()
-                try await upload(snapshot, endpointText: endpointText, client: client)
+                try await send(snapshot, to: destination, client: client)
             } catch is CancellationError {
                 return
             } catch {
-                status = .failed(guidance(for: error))
+                record(error)
             }
         }
     }
 
-    func uploadNow(snapshot: DrawingSnapshot, endpointText: String) {
-        remember(snapshot, endpointText)
+    func uploadNow(snapshot: DrawingSnapshot, to destination: Destination) {
+        remember(snapshot, destination)
         pendingUpload?.cancel()
         pendingUpload = Task { [client] in
             do {
-                try await upload(snapshot, endpointText: endpointText, client: client)
+                try await send(snapshot, to: destination, client: client)
             } catch {
-                status = .failed(guidance(for: error))
+                record(error)
             }
         }
     }
@@ -89,8 +107,8 @@ final class UploadController: ObservableObject {
     /// once an upload fails, because nothing retries until the drawing changes —
     /// so quitting and reopening the desktop app looked like a permanent failure.
     func retry() {
-        guard let snapshot = lastSnapshot else { return }
-        uploadNow(snapshot: snapshot, endpointText: lastEndpointText)
+        guard let snapshot = lastSnapshot, let destination = lastDestination else { return }
+        uploadNow(snapshot: snapshot, to: destination)
     }
 
     func retryIfOffline() {
@@ -98,9 +116,56 @@ final class UploadController: ObservableObject {
         retry()
     }
 
-    private func remember(_ snapshot: DrawingSnapshot, _ endpointText: String) {
+    private func remember(_ snapshot: DrawingSnapshot, _ destination: Destination) {
         lastSnapshot = snapshot
-        lastEndpointText = endpointText
+        lastDestination = destination
+        lastEndpointText = destination.host.address
+    }
+
+    private func record(_ error: Error) {
+        if let uploadError = error as? UploadError, case .wrongHost(let name) = uploadError {
+            status = .wrongHost(
+                "The machine at \(lastEndpointText) is not \(name). Pair again or fix the address."
+            )
+            return
+        }
+        status = .failed(guidance(for: error))
+    }
+
+    /// One drawing, one host. A failure never reroutes to another saved host —
+    /// silently sending someone's notes to the wrong machine is worse than not
+    /// sending them at all.
+    private func send(
+        _ snapshot: DrawingSnapshot,
+        to destination: Destination,
+        client: GoghModeClient
+    ) async throws {
+        guard destination.host.isPaired else {
+            try await uploadOverLegacyURL(snapshot, to: destination.host, client: client)
+            return
+        }
+        guard let secret = destination.secret else {
+            throw UploadError.invalidEndpoint
+        }
+
+        status = .saving
+        do {
+            try await client.upload(
+                snapshot,
+                to: destination.host,
+                secret: secret,
+                deviceID: destination.deviceID
+            )
+        } catch let error as URLError where error.isWorthRetrying {
+            try await Task.sleep(for: .milliseconds(300))
+            try await client.upload(
+                snapshot,
+                to: destination.host,
+                secret: secret,
+                deviceID: destination.deviceID
+            )
+        }
+        status = .saved(Date())
     }
 
     /// One probe per endpoint, cached. Asking the host what it takes is cheaper
@@ -119,7 +184,12 @@ final class UploadController: ObservableObject {
         return capabilities
     }
 
-    private func upload(_ snapshot: DrawingSnapshot, endpointText: String, client: GoghModeClient) async throws {
+    private func uploadOverLegacyURL(
+        _ snapshot: DrawingSnapshot,
+        to host: SavedHost,
+        client: GoghModeClient
+    ) async throws {
+        let endpointText = host.address
         guard let endpoint = GoghModeEndpoint(endpointText) else {
             throw UploadError.invalidEndpoint
         }

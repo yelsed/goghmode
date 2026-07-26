@@ -1,6 +1,6 @@
 # ADR-0006 · Paired devices with per-device secrets, not one shared URL token
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-07-26
 
 ## Context

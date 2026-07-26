@@ -388,9 +388,14 @@ authentication failure so that a caller learns nothing from which check failed:
 
 1. `deviceId` is a known, unrevoked device.
 2. The timestamp is within ±120 seconds of the host clock.
-3. **The timestamp is strictly greater than that device's `lastAcceptedTimestamp`.**
-4. The message authentication code matches, compared in constant time.
+3. The message authentication code matches, compared in constant time.
+4. **The timestamp is strictly greater than that device's `lastAcceptedTimestamp`**, recorded in
+   the same step so the check cannot be raced.
 5. Only now is the body handed to `serde_json`.
+
+Step 4 sits after the signature rather than before it because it *writes*. An unauthenticated
+caller must not be able to move a persisted value, so the cheap stateless checks come first, the
+signature next, and the one check with a side effect last.
 
 **Order matters and step 5 is the point.** Hashing a body is cheap and parsing it is not. If parsing
 came first, an unauthenticated caller could make the host parse 4 MiB of adversarial JSON on every

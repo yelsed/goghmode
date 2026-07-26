@@ -87,17 +87,25 @@ Independent of Phases 1, 3 and 4; absorbs the pairing work in Phase 2. Planned i
 full in [companion-multi-host-plan.md](companion-multi-host-plan.md), which carries
 the threat model, the protocol, and the ordered sub-phases.
 
-- [ ] Linux host on Arch/Omarchy, and host-neutral wording everywhere (`xdg-open`,
+- [x] Linux host on Arch/Omarchy, and host-neutral wording everywhere (`xdg-open`,
       a desktop entry instead of an application bundle, no user-visible "Mac").
-- [ ] A stable host identity that is not the host's address, plus a device registry
+      **Still unverified: that the window actually opens under Hyprland.**
+- [x] A stable host identity that is not the host's address, plus a device registry
       that can be revoked one device at a time.
-- [ ] Pairing: a single-use code shown as a QR, approved by a person on the host.
-- [ ] Signed uploads with replay protection, and a signed response so the companion
+- [x] Pairing: a single-use code shown as a QR, approved by a person on the host.
+- [x] Signed uploads with replay protection, and a signed response so the companion
       can tell it reached the host it paired with.
-- [ ] Several saved hosts in the companion, with the destination always visible and
+- [x] Several saved hosts in the companion, with the destination always visible and
       chosen explicitly.
-- [ ] Sending one page to several named hosts — optional, and deliberately the last
-      thing decided.
+- [ ] ~~Sending one page to several named hosts~~ — **decided against.** Selecting a
+      host and sending twice is impossible to get wrong, and a blanket destination
+      is the ambiguity this whole phase exists to remove.
+- [ ] Offer every local address in the pairing code, not only the one the host
+      guesses. A machine on a virtual private network still needs the right
+      interface picked by hand. The field is already a list.
+- [ ] ~~Service discovery over multicast DNS~~ — **decided against** for now: it adds
+      a service advertisement on every network the host joins, to save re-entering
+      an address that pairing already carries.
 
 ### Later / unscheduled
 - [ ] Photo and snapshot import, so a phone photo of a paper page enters the same

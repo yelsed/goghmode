@@ -14,13 +14,15 @@ minimum.
 ## Layout
 Two states in one root view.
 
-- **Setup** — a text field for the Mac's mobile URL, persisted in
-  `@AppStorage("goghModeEndpoint")`. This is the entire pairing story.
+- **Setup** — the host list. Pairing scans a QR code from the desktop's Devices
+  panel, or takes the same payload pasted as text. `HostStore` keeps the saved
+  hosts; their keys are in the Keychain, non-syncing.
 - **Drawing** — a toolbar row above a full-bleed canvas:
   - Status badge (also the retry button)
+  - Host chip — the destination, always visible, tap to switch
   - Save Now
   - Clear
-  - Settings (back to the URL field)
+  - Settings (back to the host list)
   - `PKCanvasView` filling everything below, with the system tool palette floating
     over it.
 
@@ -67,10 +69,24 @@ carries `NSAllowsLocalNetworking` and `NSLocalNetworkUsageDescription`, both
 required for plain-HTTP LAN traffic.
 
 ## Auth & access
-None beyond the secret URL. No discovery, no Bonjour, no `NWBrowser`, no QR code —
-the user pastes the URL the Mac shows. `GoghModeEndpoint` requires http or https
-plus a host, then appends `save` unless the path already ends in `/save`, so both
-`http://ip:8787/{token}/` and the full `.../save` URL work. `file://` is rejected.
+Two kinds of saved host, and the interface says which is which.
+
+**Paired** (`credential == .paired`). The device holds a key derived during
+pairing, never received, kept in the Keychain as
+`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` so it does not travel to
+another device through a backup. Every upload is signed, and **the reply must be
+signed back before the app reports success** — a machine that merely answers at
+the saved address cannot pass for the paired host. Failing that check is its own
+status, `wrongHost`, deliberately not merged into `Offline`, because "offline"
+invites a retry and this must not be retried into.
+
+**Legacy** (`credential == .legacyURL`). The original secret URL, kept so an
+endpoint saved by an older build is not stranded — it is adopted into the host
+list on first launch. `GoghModeEndpoint` still requires http or https plus a host,
+then appends `save` unless the path already ends in `/save`. Labelled
+"unauthenticated link" in the list rather than dressed up.
+
+No discovery, no Bonjour, no `NWBrowser`. Pairing carries the address.
 
 ## Data
 
@@ -134,7 +150,7 @@ Errors map to actions, not codes:
 
 | State | Behaviour |
 | --- | --- |
-| Setup | URL field, nothing else. No canvas until an endpoint is stored. |
+| Setup | Host list and pairing. No canvas until a host is selected. |
 | Idle | Green dot, canvas ready. |
 | Waiting | Orange dot during the 600 ms debounce. |
 | Saving | Orange dot, request in flight. |
@@ -159,7 +175,10 @@ Shipped. Only remaining work is listed.
 ## Tasks
 - [ ] Skip the upload when the drawing has not changed since the last successful one
       — the cheapest fix for the resend cost.
-- [ ] Replace URL paste with QR scanning; it also removes the stale-port trap.
+- [x] Replace URL paste with QR scanning. **The scanner compiles but has not been
+      run on a device** — pasting the payload is the tested path.
+- [ ] Update a paired host's address when it moves, rather than needing a re-pair.
+      The identity already survives the move; only the stored address does not.
 
 ## Open questions
 - Should stroke ids survive edits? Page identity is now stable — a client-minted

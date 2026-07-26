@@ -73,6 +73,9 @@ through one function.
 | `src/mobile_server.rs` | Blocking HTTP/1.1 server: serves the embedded web app, accepts snapshot uploads, validates them. |
 | `src/prompt.rs` | Two hardcoded prompt strings (generic and Claude) plus `PromptTarget`. |
 | `src/skill.rs` | The embedded `SKILL.md` text and its installer. |
+| `src/crypto.rs` | HMAC-SHA256, SHA-256, hex, length-prefixed message framing, and the one secure-random source that is allowed to fail rather than fall back. |
+| `src/protocol.rs` | Every signed-message formula for paired devices, in one place, because the host and the companion must agree on them exactly. |
+| `src/host.rs` | Host identity, the paired-device registry, and the pairing state machine — including the condition variable a request waits on while someone answers the approval sheet. |
 | `src/app_install.rs` | Makes the host launchable: `~/Applications/GoghMode.app` on macOS (plist, launcher script, binary copy, ad-hoc codesign), a `~/.local/share` desktop entry and icon on Linux. `install_app` is the only place that picks between them. |
 
 ## The wire contract
@@ -167,21 +170,57 @@ chunks to keep it fixed.
 
 ## Trust model
 
-There is authentication, of a sort, and it is worth being precise about what it
-covers.
+There are two credential systems, and which one a request uses is decided by the
+route it arrives on.
 
-- The token is 16 random bytes hex-encoded, read from `/dev/urandom` with a
-  time-and-PID fallback, persisted at `~/.goghmode/mobile-token` so home-screen
-  shortcuts survive restarts.
-- **The token is the route prefix**, not a header: everything lives under
-  `/{token}/`. Clients need no auth code at all — the web app just does a relative
-  `fetch("save")`.
-- There is no `Authorization` header, no cookie, no CSRF token, no origin check,
-  and no TLS. Anything on the same LAN that knows the path can POST a drawing.
+### Paired devices — `/v2/*`
 
-That is the accepted risk for a tool that only ever runs on a home or office
-network while its window is open. Reasoning and what would change it:
-[ADR-0002](decisions/0002-token-in-path-lan-pairing.md).
+The native companion pairs once and signs every request afterwards.
+
+- The host has a `hostId`: 16 random bytes at `~/.goghmode/host-id`, mode `0600`,
+  kept forever. **Identity is not the address**, so a machine that changes network
+  is still recognisably itself and a stale address cannot silently become a
+  different machine.
+- Pairing shows a single-use secret for ~120 seconds as a QR code. **The device
+  secret is derived from it on both sides and never transmitted**, so recording the
+  whole exchange yields nothing. Both halves of the exchange are signed under the
+  pairing secret, so a caller that never saw the code cannot even raise the
+  approval prompt — and a person still has to tap approve.
+- Uploads carry `HMAC-SHA256(deviceSecret, deviceId ‖ timestamp ‖ nonce ‖ hostId ‖
+  SHA-256(body))`. Verification order is the security property: known device,
+  clock within ±120 s, signature, then the monotonic-timestamp check that *writes*,
+  and only then is the body handed to `serde_json`. Hashing is cheap and parsing is
+  not.
+- Replay is stopped by a per-device strictly increasing timestamp persisted in
+  `devices.json` — a set of nonces in memory is emptied by a restart.
+- Every answer to an authenticated request carries
+  `HMAC-SHA256(deviceSecret, "response" ‖ nonce ‖ status)`, failures included, so
+  the companion can tell a paired host from a machine merely answering there.
+- Every authentication failure is an identical `401`; every pairing failure an
+  identical `403`.
+
+Reasoning: [ADR-0006](decisions/0006-paired-devices-over-shared-url-token.md).
+
+### The legacy secret URL — `/{token}/*`
+
+The browser companion has no pairing step by design, so the original scheme stays
+for it.
+
+- 16 random bytes hex-encoded at `~/.goghmode/mobile-token`, used as the **route
+  prefix** rather than a header, so the web app needs no credential code at all —
+  just a relative `fetch("save")`.
+- No `Authorization` header, no cookie, no CSRF token, no origin check, no
+  transport-layer security. Anything on the network that knows the path can POST.
+- **The first successful pairing turns this route off**, with a notice and a
+  toggle in the Devices panel. An authenticated door beside an anonymous one
+  writing to the same directory is not an improvement.
+
+Reasoning: [ADR-0002](decisions/0002-token-in-path-lan-pairing.md), still standing
+for this surface only.
+
+**Neither system encrypts drawing contents.** That is a named residual risk, not an
+oversight; the upgrade path is transport-layer security with a certificate pinned
+at pairing time.
 
 The real trust boundary is `validate_snapshot`, which rejects anything malformed
 *before* a file is written, and returns a **named** reason so the client can say
