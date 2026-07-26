@@ -1,13 +1,15 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use arboard::{Clipboard, ImageData};
 use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke as EguiStroke, TextureHandle, Vec2};
 
 use crate::drawing::{Drawing, Stroke};
 use crate::export::{snapshot_to_rgba, write_snapshot};
+use crate::host::{Host, PairingPayload, PairingState};
 use crate::mobile_server::{MobileServer, DEFAULT_PORT};
 use crate::pages::{list_pages, load_page_snapshot, pages_dir, write_page, PageEntry};
 use crate::prompt::{prompt_text, PromptTarget};
@@ -27,6 +29,7 @@ const FILE_MANAGER_COMMAND: &str = if cfg!(target_os = "macos") {
 enum View {
     Canvas,
     Pages,
+    Devices,
 }
 
 pub struct GoghModeApp {
@@ -37,11 +40,16 @@ pub struct GoghModeApp {
     view: View,
     pages: Vec<PageEntry>,
     thumbnails: HashMap<String, TextureHandle>,
+    host: Host,
+    goghmode_dir: PathBuf,
+    pairing_payload: Option<PairingPayload>,
+    pairing_qr: Option<TextureHandle>,
+    host_name_draft: String,
 }
 
 impl GoghModeApp {
-    pub fn new(drawings_dir: PathBuf) -> Self {
-        let mobile_server = MobileServer::start(&drawings_dir).ok();
+    pub fn new(drawings_dir: PathBuf, host: Host, goghmode_dir: PathBuf) -> Self {
+        let mobile_server = MobileServer::start(&drawings_dir, Arc::clone(&host)).ok();
         let status = match mobile_server.as_ref() {
             Some(server) => format!(
                 "Draw, then Copy image, Copy prompt, or use /goghmode. Mobile: {}",
@@ -61,6 +69,11 @@ impl GoghModeApp {
             status,
             view: View::Canvas,
             thumbnails: HashMap::new(),
+            host_name_draft: host.identity().display_name,
+            host,
+            goghmode_dir,
+            pairing_payload: None,
+            pairing_qr: None,
         }
     }
 
@@ -218,6 +231,7 @@ impl eframe::App for GoghModeApp {
         match self.view {
             View::Canvas => self.draw_canvas(ui),
             View::Pages => self.draw_page_browser(ui),
+            View::Devices => self.draw_devices(ui),
         }
         ui.add_space(8.0);
         StatusBar::show(ui, &self.status);
@@ -331,6 +345,232 @@ impl GoghModeApp {
         {
             self.view = View::Pages;
             self.refresh_pages();
+        }
+        let device_count = self.host.devices().len();
+        if ui
+            .selectable_label(self.view == View::Devices, format!("Devices ({device_count})"))
+            .clicked()
+        {
+            self.view = View::Devices;
+        }
+    }
+
+    fn draw_devices(&mut self, ui: &mut egui::Ui) {
+        let pairing = self.host.pairing_state();
+        // Both the countdown and a request arriving from the network need the
+        // panel to redraw without anyone touching the keyboard.
+        if !matches!(pairing, PairingState::Idle) {
+            ui.ctx().request_repaint_after(Duration::from_millis(250));
+        }
+
+        self.draw_host_identity(ui);
+        ui.add_space(10.0);
+
+        match &pairing {
+            PairingState::Pending { request, .. } => {
+                let request = request.clone();
+                self.draw_approval_request(ui, &request);
+            }
+            PairingState::Armed { expires_at, .. } => {
+                let remaining = expires_at.saturating_duration_since(std::time::Instant::now());
+                self.draw_armed_pairing(ui, remaining);
+            }
+            PairingState::Idle => self.draw_pairing_start(ui),
+        }
+
+        ui.add_space(14.0);
+        self.draw_device_list(ui);
+        ui.add_space(14.0);
+        self.draw_legacy_toggle(ui);
+    }
+
+    fn draw_host_identity(&mut self, ui: &mut egui::Ui) {
+        let identity = self.host.identity();
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("This host").strong());
+            ui.add(egui::TextEdit::singleline(&mut self.host_name_draft).desired_width(240.0));
+            if ui.button("Rename").clicked() {
+                let goghmode_dir = self.goghmode_dir.clone();
+                self.status = match self.host.set_display_name(&self.host_name_draft, &goghmode_dir)
+                {
+                    Ok(()) => format!("This host is now called {}", self.host_name_draft),
+                    Err(error) => format!("Could not rename this host: {error}"),
+                };
+            }
+        });
+        // Shown so two hosts can be told apart at a glance when their names are
+        // similar. It is not a secret — it is only useful to a paired device.
+        ui.label(
+            RichText::new(format!("Identity {}", short_host_id(&identity.host_id)))
+                .size(12.0)
+                .color(Color32::from_rgb(150, 162, 178)),
+        );
+    }
+
+    fn draw_pairing_start(&mut self, ui: &mut egui::Ui) {
+        if ui.button("Pair a device").clicked() {
+            self.start_pairing(ui.ctx());
+        }
+        ui.label(
+            RichText::new(
+                "Pairing shows a code for two minutes. The device derives its own key from it, \
+                 so nothing secret is ever sent over the network.",
+            )
+            .size(12.0)
+            .color(Color32::from_rgb(150, 162, 178)),
+        );
+    }
+
+    fn draw_armed_pairing(&mut self, ui: &mut egui::Ui, remaining: Duration) {
+        ui.label(
+            RichText::new(format!(
+                "Scan this in the GoghMode companion — {} seconds left",
+                remaining.as_secs()
+            ))
+            .strong(),
+        );
+        if let Some(texture) = &self.pairing_qr {
+            ui.image((texture.id(), texture.size_vec2()));
+        }
+        if let Some(payload) = &self.pairing_payload {
+            let text = serde_json::to_string(payload).unwrap_or_default();
+            ui.label(
+                RichText::new("Or paste this into the companion by hand")
+                    .size(12.0)
+                    .color(Color32::from_rgb(150, 162, 178)),
+            );
+            ui.add(egui::TextEdit::multiline(&mut text.as_str()).desired_rows(3));
+            if ui.button("Copy pairing code").clicked() {
+                let copied = Clipboard::new()
+                    .and_then(|mut clipboard| clipboard.set_text(text.clone()))
+                    .is_ok();
+                self.status = if copied {
+                    "Copied the pairing code".to_owned()
+                } else {
+                    "Clipboard unavailable; type the code shown".to_owned()
+                };
+            }
+        }
+        if ui.button("Cancel").clicked() {
+            self.host.cancel_pairing();
+            self.pairing_payload = None;
+            self.pairing_qr = None;
+        }
+    }
+
+    /// The approval sheet. A request only reaches here once it has proved it
+    /// holds the shown code, so nothing on the network can raise this prompt.
+    fn draw_approval_request(&mut self, ui: &mut egui::Ui, request: &crate::host::PendingPairing) {
+        egui::Frame::new()
+            .fill(Color32::from_rgb(28, 36, 48))
+            .stroke(EguiStroke::new(1.0, Color32::from_rgb(226, 183, 80)))
+            .corner_radius(egui::CornerRadius::same(12))
+            .inner_margin(egui::Margin::same(14))
+            .show(ui, |ui| {
+                ui.label(
+                    RichText::new(format!("\"{}\" wants to pair", request.device_name))
+                        .size(16.0)
+                        .strong(),
+                );
+                ui.label(
+                    RichText::new(format!(
+                        "{} at {}",
+                        request.platform, request.peer_address
+                    ))
+                    .size(12.0)
+                    .color(Color32::from_rgb(150, 162, 178)),
+                );
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if primary_button(ui, "Approve").clicked() {
+                        self.host.decide_pending_pairing(true);
+                        self.pairing_payload = None;
+                        self.pairing_qr = None;
+                        self.status = format!("Paired with {}", request.device_name);
+                    }
+                    if ui.button("Deny").clicked() {
+                        self.host.decide_pending_pairing(false);
+                        self.pairing_payload = None;
+                        self.pairing_qr = None;
+                        self.status = "Refused the pairing request".to_owned();
+                    }
+                });
+            });
+    }
+
+    fn draw_device_list(&mut self, ui: &mut egui::Ui) {
+        let devices = self.host.devices();
+        ui.label(RichText::new("Paired devices").strong());
+        if devices.is_empty() {
+            ui.label(
+                RichText::new("None yet. Uploads still arrive on the old mobile URL.")
+                    .size(12.0)
+                    .color(Color32::from_rgb(150, 162, 178)),
+            );
+            return;
+        }
+
+        for device in devices {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(&device.device_name).strong());
+                ui.label(
+                    RichText::new(&device.platform)
+                        .size(12.0)
+                        .color(Color32::from_rgb(150, 162, 178)),
+                );
+                if ui.button("Revoke").clicked() {
+                    self.status = match self.host.revoke(&device.device_id) {
+                        Ok(()) => format!("Revoked {}", device.device_name),
+                        Err(error) => format!("Could not revoke {}: {error}", device.device_name),
+                    };
+                }
+            });
+        }
+    }
+
+    fn draw_legacy_toggle(&mut self, ui: &mut egui::Ui) {
+        let mut enabled = self.host.legacy_uploads_enabled();
+        if ui
+            .checkbox(&mut enabled, "Accept uploads on the old mobile URL")
+            .changed()
+        {
+            self.status = match self.host.set_legacy_uploads_enabled(enabled) {
+                Ok(()) if enabled => {
+                    "The old mobile URL accepts uploads again — anyone on this network who knows it can write."
+                        .to_owned()
+                }
+                Ok(()) => "The old mobile URL no longer accepts uploads".to_owned(),
+                Err(error) => format!("Could not change that setting: {error}"),
+            };
+        }
+        ui.label(
+            RichText::new(
+                "Pairing a device turns this off. The browser companion has no pairing step, \
+                 so it needs this on.",
+            )
+            .size(12.0)
+            .color(Color32::from_rgb(150, 162, 178)),
+        );
+    }
+
+    fn start_pairing(&mut self, ctx: &egui::Context) {
+        // Only the address the host believes it is reachable on. A machine with
+        // several interfaces should offer all of them; the payload field is
+        // already a list so that is a fill-in, not a wire change.
+        let addresses = self
+            .mobile_server
+            .as_ref()
+            .map(|server| vec![server.base_url()])
+            .unwrap_or_default();
+
+        match self.host.arm_pairing(addresses) {
+            Ok(payload) => {
+                let text = serde_json::to_string(&payload).unwrap_or_default();
+                self.pairing_qr = qr_texture(ctx, &text);
+                self.pairing_payload = Some(payload);
+                self.status = "Scan the code in the companion, then approve it here".to_owned();
+            }
+            Err(error) => self.status = format!("Could not start pairing: {error}"),
         }
     }
 
@@ -602,6 +842,51 @@ fn paint_stroke(painter: &egui::Painter, canvas_rect: Rect, stroke: &Stroke) {
             );
         }
     }
+}
+
+/// Enough of the identity to tell two hosts apart on screen without printing a
+/// 32-character string at someone.
+fn short_host_id(host_id: &str) -> String {
+    host_id
+        .as_bytes()
+        .chunks(4)
+        .take(2)
+        .map(|chunk| String::from_utf8_lossy(chunk).to_uppercase())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+/// Renders the pairing payload as a QR code. Typing a 32-character secret on a
+/// tablet is the kind of friction that stops people pairing at all.
+fn qr_texture(ctx: &egui::Context, text: &str) -> Option<TextureHandle> {
+    const MODULE_PIXELS: usize = 4;
+    const QUIET_MODULES: usize = 4;
+
+    let code = qrcode::QrCode::new(text.as_bytes()).ok()?;
+    let modules = code.to_colors();
+    let width = code.width();
+    let side = (width + QUIET_MODULES * 2) * MODULE_PIXELS;
+
+    let mut pixels = vec![Color32::WHITE; side * side];
+    for (index, module) in modules.iter().enumerate() {
+        if *module != qrcode::Color::Dark {
+            continue;
+        }
+        let module_x = (index % width + QUIET_MODULES) * MODULE_PIXELS;
+        let module_y = (index / width + QUIET_MODULES) * MODULE_PIXELS;
+        for y in module_y..module_y + MODULE_PIXELS {
+            for x in module_x..module_x + MODULE_PIXELS {
+                pixels[y * side + x] = Color32::BLACK;
+            }
+        }
+    }
+
+    let image = egui::ColorImage {
+        size: [side, side],
+        pixels,
+        source_size: egui::Vec2::new(side as f32, side as f32),
+    };
+    Some(ctx.load_texture("pairing-qr", image, egui::TextureOptions::NEAREST))
 }
 
 fn unix_millis() -> u128 {

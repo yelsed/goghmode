@@ -1,21 +1,38 @@
 #[allow(dead_code)]
+#[path = "../src/crypto.rs"]
+mod crypto;
+#[allow(dead_code)]
 #[path = "../src/drawing.rs"]
 mod drawing;
 #[path = "../src/export.rs"]
 mod export;
 
 #[allow(dead_code)]
+#[path = "../src/host.rs"]
+mod host;
+#[allow(dead_code)]
 #[path = "../src/mobile_server.rs"]
 mod mobile_server;
 #[allow(dead_code)]
 #[path = "../src/pages.rs"]
 mod pages;
+#[allow(dead_code)]
+#[path = "../src/protocol.rs"]
+mod protocol;
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
 use mobile_server::MobileServer;
+
+/// Every server needs a host identity. Tests get a throwaway one so they never
+/// touch the real `~/.goghmode`.
+fn test_host() -> (tempfile::TempDir, host::Host) {
+    let directory = tempfile::tempdir().unwrap();
+    let host = host::SharedHost::load(directory.path()).unwrap();
+    (directory, host)
+}
 
 fn http_request(url: &str, method: &str, path: &str) -> String {
     let (_, rest) = url.split_once("://").unwrap();
@@ -61,13 +78,15 @@ fn path_from_url(url: &str) -> &str {
 #[test]
 fn production_start_api_is_available_for_desktop_app() {
     let directory = tempfile::tempdir().unwrap();
-    let server = MobileServer::start(directory.path()).unwrap();
+    let (_host_dir, host) = test_host();
+    let server = MobileServer::start(directory.path(), host).unwrap();
     assert!(server.url().starts_with("http://"));
 }
 
 #[test]
 fn local_mobile_server_serves_embedded_app_shell_under_secret_path() {
-    let server = MobileServer::start_loopback_for_test().unwrap();
+    let (_host_dir, host) = test_host();
+    let server = MobileServer::start_loopback_for_test(host).unwrap();
     let base_path = path_from_url(server.url());
 
     assert!(server.url().starts_with("http://127.0.0.1:"));
@@ -90,7 +109,8 @@ fn local_mobile_server_serves_embedded_app_shell_under_secret_path() {
 
 #[test]
 fn local_mobile_server_redirects_secret_path_to_trailing_slash() {
-    let server = MobileServer::start_loopback_for_test().unwrap();
+    let (_host_dir, host) = test_host();
+    let server = MobileServer::start_loopback_for_test(host).unwrap();
     let base_path = path_from_url(server.url());
     let no_slash = base_path.trim_end_matches('/');
 
@@ -102,7 +122,8 @@ fn local_mobile_server_redirects_secret_path_to_trailing_slash() {
 
 #[test]
 fn local_mobile_server_rejects_unknown_paths_and_write_methods() {
-    let server = MobileServer::start_loopback_for_test().unwrap();
+    let (_host_dir, host) = test_host();
+    let server = MobileServer::start_loopback_for_test(host).unwrap();
     let base_path = path_from_url(server.url());
 
     let wrong_path = http_request(server.url(), "GET", "/");
@@ -118,7 +139,8 @@ fn local_mobile_server_rejects_unknown_paths_and_write_methods() {
 #[test]
 fn local_mobile_server_accepts_snapshot_and_writes_latest_files() {
     let directory = tempfile::tempdir().unwrap();
-    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path()).unwrap();
+    let (_host_dir, host) = test_host();
+    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
     let save_path = format!("{}save", path_from_url(server.url()));
     let body = r##"{
         "schemaVersion": 1,
@@ -195,7 +217,8 @@ fn http_post_in_chunks(url: &str, path: &str, body: &str) -> String {
 #[test]
 fn local_mobile_server_accepts_snapshot_split_across_packets() {
     let directory = tempfile::tempdir().unwrap();
-    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path()).unwrap();
+    let (_host_dir, host) = test_host();
+    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
     let save_path = format!("{}save", path_from_url(server.url()));
     let body = large_snapshot_body(4000);
     assert!(body.len() > 64 * 1024, "body should span several reads");
@@ -213,7 +236,8 @@ fn local_mobile_server_accepts_snapshot_split_across_packets() {
 #[test]
 fn local_mobile_server_rejects_invalid_snapshot_payloads() {
     let directory = tempfile::tempdir().unwrap();
-    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path()).unwrap();
+    let (_host_dir, host) = test_host();
+    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
     let save_path = format!("{}save", path_from_url(server.url()));
 
     let response = http_post(server.url(), &save_path, "{\"schemaVersion\":1}");
@@ -251,7 +275,8 @@ fn save_snapshot(server: &MobileServer, body: &str) -> String {
 #[test]
 fn schema_version_one_snapshots_still_save_and_gain_a_legacy_page() {
     let directory = tempfile::tempdir().unwrap();
-    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path()).unwrap();
+    let (_host_dir, host) = test_host();
+    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
 
     let response = save_snapshot(&server, &snapshot_body(1, ""));
 
@@ -268,7 +293,8 @@ fn schema_version_one_snapshots_still_save_and_gain_a_legacy_page() {
 #[test]
 fn schema_version_two_snapshots_are_stored_under_their_page_and_mirrored_to_latest() {
     let directory = tempfile::tempdir().unwrap();
-    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path()).unwrap();
+    let (_host_dir, host) = test_host();
+    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
 
     let response = save_snapshot(
         &server,
@@ -309,7 +335,8 @@ fn page_ids_that_could_escape_the_drawings_directory_are_refused() {
         .filter_map(Result::ok)
         .map(|entry| entry.file_name())
         .collect();
-    let server = MobileServer::start_loopback_with_drawings_dir_for_test(&drawings_dir).unwrap();
+    let (_host_dir, host) = test_host();
+    let server = MobileServer::start_loopback_with_drawings_dir_for_test(&drawings_dir, host).unwrap();
 
     for page_id in ["../escape", "a/b", "", "/etc/passwd", &"x".repeat(65)] {
         let body = snapshot_body(2, &format!(r#""page": {{ "id": "{page_id}" }},"#));
@@ -338,7 +365,8 @@ fn page_ids_that_could_escape_the_drawings_directory_are_refused() {
 #[test]
 fn schema_version_two_without_a_page_is_refused_rather_than_filed_as_legacy() {
     let directory = tempfile::tempdir().unwrap();
-    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path()).unwrap();
+    let (_host_dir, host) = test_host();
+    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
 
     let response = save_snapshot(&server, &snapshot_body(2, ""));
 
@@ -350,7 +378,8 @@ fn schema_version_two_without_a_page_is_refused_rather_than_filed_as_legacy() {
 #[test]
 fn unknown_schema_versions_are_refused_with_a_reason_the_companion_can_read() {
     let directory = tempfile::tempdir().unwrap();
-    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path()).unwrap();
+    let (_host_dir, host) = test_host();
+    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
 
     let response = save_snapshot(&server, &snapshot_body(3, ""));
 
@@ -362,7 +391,8 @@ fn unknown_schema_versions_are_refused_with_a_reason_the_companion_can_read() {
 
 #[test]
 fn capabilities_endpoint_tells_a_companion_which_schema_versions_this_mac_takes() {
-    let server = MobileServer::start_loopback_for_test().unwrap();
+    let (_host_dir, host) = test_host();
+    let server = MobileServer::start_loopback_for_test(host).unwrap();
     let base_path = path_from_url(server.url());
 
     let response = http_request(server.url(), "GET", &format!("{base_path}capabilities"));
@@ -379,7 +409,8 @@ fn capabilities_endpoint_tells_a_companion_which_schema_versions_this_mac_takes(
 #[test]
 fn saving_two_pages_indexes_both_and_points_latest_at_the_newer_one() {
     let directory = tempfile::tempdir().unwrap();
-    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path()).unwrap();
+    let (_host_dir, host) = test_host();
+    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
 
     save_snapshot(
         &server,

@@ -7,8 +7,14 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::crypto::sha256_hex;
 use crate::drawing::DrawingSnapshot;
+use crate::host::{unix_millis, Host, PairOutcome, PLATFORM};
 use crate::pages::{page_id_is_safe, write_page};
+use crate::protocol::{
+    device_id_is_safe, response_mac, upload_mac_matches, HEADER_DEVICE, HEADER_MAC, HEADER_NONCE,
+    HEADER_PAIR_MAC, HEADER_TIMESTAMP, PROTOCOL_VERSION, TIMESTAMP_TOLERANCE_MILLIS,
+};
 
 const INDEX_HTML: &[u8] = include_bytes!("../mobile/index.html");
 const MANIFEST: &[u8] = include_bytes!("../mobile/manifest.webmanifest");
@@ -23,9 +29,19 @@ const SUPPORTED_SCHEMA_VERSIONS: [u8; 2] = [1, 2];
 /// Lets a companion ask what this host understands instead of inferring it
 /// from a rejection. An older host has no such route and answers 404, which is
 /// a usable answer.
-const CAPABILITIES: &[u8] = br#"{"schemaVersions":[1,2],"features":["pages"]}"#;
+const CAPABILITIES: &[u8] =
+    br#"{"schemaVersions":[1,2],"features":["pages","pairing-v2"]}"#;
 
 pub const DEFAULT_PORT: u16 = 8787;
+
+/// Everything a request needs to be answered. The paired-device routes live
+/// outside the token prefix — a device authenticates by signature, so the path
+/// secret has no part to play there.
+struct ServerContext {
+    route_prefix: String,
+    drawings_dir: PathBuf,
+    host: Host,
+}
 
 pub struct MobileServer {
     url: String,
@@ -35,7 +51,7 @@ pub struct MobileServer {
 }
 
 impl MobileServer {
-    pub fn start(drawings_dir: impl AsRef<Path>) -> anyhow::Result<Self> {
+    pub fn start(drawings_dir: impl AsRef<Path>, host: Host) -> anyhow::Result<Self> {
         let display_ip = preferred_lan_ip();
         let token = load_or_create_token(&default_token_path()).unwrap_or_else(|_| random_token());
         let drawings_dir = drawings_dir.as_ref().to_path_buf();
@@ -45,24 +61,31 @@ impl MobileServer {
             display_ip,
             token.clone(),
             drawings_dir.clone(),
+            Arc::clone(&host),
         ) {
             Ok(server) => Ok(server),
-            Err(_) => {
-                Self::start_with_token(Ipv4Addr::UNSPECIFIED, 0, display_ip, token, drawings_dir)
-            }
+            Err(_) => Self::start_with_token(
+                Ipv4Addr::UNSPECIFIED,
+                0,
+                display_ip,
+                token,
+                drawings_dir,
+                host,
+            ),
         }
     }
 
     #[allow(dead_code)]
     #[cfg(test)]
-    pub fn start_loopback_for_test() -> anyhow::Result<Self> {
-        Self::start_loopback_with_drawings_dir_for_test(std::env::temp_dir())
+    pub fn start_loopback_for_test(host: Host) -> anyhow::Result<Self> {
+        Self::start_loopback_with_drawings_dir_for_test(std::env::temp_dir(), host)
     }
 
     #[allow(dead_code)]
     #[cfg(test)]
     pub fn start_loopback_with_drawings_dir_for_test(
         drawings_dir: impl AsRef<Path>,
+        host: Host,
     ) -> anyhow::Result<Self> {
         Self::start_with_token(
             Ipv4Addr::LOCALHOST,
@@ -70,11 +93,22 @@ impl MobileServer {
             IpAddr::V4(Ipv4Addr::LOCALHOST),
             random_token(),
             drawings_dir.as_ref().to_path_buf(),
+            host,
         )
     }
 
     pub fn url(&self) -> &str {
         &self.url
+    }
+
+    /// Where a paired companion sends its uploads. Carries no secret, because
+    /// the signature is the credential.
+    pub fn base_url(&self) -> String {
+        self.url
+            .rsplit_once('/')
+            .and_then(|(head, _)| head.rsplit_once('/'))
+            .map(|(head, _)| head.to_owned())
+            .unwrap_or_else(|| self.url.clone())
     }
 
     /// The port actually bound. `start` falls back to a random port when 8787
@@ -90,6 +124,7 @@ impl MobileServer {
         display_ip: IpAddr,
         token: String,
         drawings_dir: PathBuf,
+        host: Host,
     ) -> anyhow::Result<Self> {
         let listener = TcpListener::bind((bind_ip, port))?;
         listener.set_nonblocking(true)?;
@@ -97,16 +132,12 @@ impl MobileServer {
         let route_prefix = format!("/{token}/");
         let shutdown = Arc::new(AtomicBool::new(false));
         let thread_shutdown = Arc::clone(&shutdown);
-        let thread_prefix = route_prefix.clone();
-        let thread_drawings_dir = drawings_dir.clone();
-        let thread = thread::spawn(move || {
-            serve(
-                listener,
-                thread_prefix,
-                thread_drawings_dir,
-                thread_shutdown,
-            )
-        });
+        let context = ServerContext {
+            route_prefix: route_prefix.clone(),
+            drawings_dir,
+            host,
+        };
+        let thread = thread::spawn(move || serve(listener, context, thread_shutdown));
         let url = format!(
             "http://{}:{}{}",
             display_ip,
@@ -133,15 +164,10 @@ impl Drop for MobileServer {
     }
 }
 
-fn serve(
-    listener: TcpListener,
-    route_prefix: String,
-    drawings_dir: PathBuf,
-    shutdown: Arc<AtomicBool>,
-) {
+fn serve(listener: TcpListener, context: ServerContext, shutdown: Arc<AtomicBool>) {
     while !shutdown.load(Ordering::Relaxed) {
         match listener.accept() {
-            Ok((mut stream, _)) => handle_connection(&mut stream, &route_prefix, &drawings_dir),
+            Ok((mut stream, peer)) => handle_connection(&mut stream, &context, peer),
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(25));
             }
@@ -150,7 +176,7 @@ fn serve(
     }
 }
 
-fn handle_connection(stream: &mut TcpStream, route_prefix: &str, drawings_dir: &Path) {
+fn handle_connection(stream: &mut TcpStream, context: &ServerContext, peer: SocketAddr) {
     // Accepted sockets inherit the listener's non-blocking flag on macOS, so
     // every read past the first returned WouldBlock and any upload spanning more
     // than one TCP segment was answered with 400.
@@ -164,13 +190,36 @@ fn handle_connection(stream: &mut TcpStream, route_prefix: &str, drawings_dir: &
         }
     };
 
+    let route_prefix = context.route_prefix.as_str();
+    let drawings_dir = context.drawings_dir.as_path();
     let path = request
         .raw_path
         .split('?')
         .next()
-        .unwrap_or(&request.raw_path);
+        .unwrap_or(&request.raw_path)
+        .to_owned();
+    let path = path.as_str();
+
+    if path.starts_with("/v2/") {
+        handle_paired_route(stream, context, &request, path, peer);
+        return;
+    }
+
     if request.method == "POST" {
         if path == format!("{route_prefix}save") {
+            // Once a device has been paired, the anonymous door closes. Leaving
+            // it open would mean an authenticated route sitting beside an
+            // unauthenticated one writing to the same drawings directory.
+            if !context.host.legacy_uploads_enabled() {
+                write_response(
+                    stream,
+                    403,
+                    "Forbidden",
+                    "text/plain; charset=utf-8",
+                    b"This host now requires a paired device. Re-enable the old mobile URL in GoghMode if you still need it.",
+                );
+                return;
+            }
             handle_save_request(stream, drawings_dir, &request.body);
         } else {
             write_response(
@@ -217,10 +266,300 @@ fn handle_connection(stream: &mut TcpStream, route_prefix: &str, drawings_dir: &
     }
 }
 
+#[derive(serde::Deserialize)]
+struct PairRequestBody {
+    #[serde(rename = "hostId")]
+    host_id: String,
+    #[serde(rename = "deviceId")]
+    device_id: String,
+    #[serde(rename = "deviceName")]
+    device_name: String,
+    platform: String,
+}
+
+struct AuthenticatedDevice {
+    secret: String,
+    nonce: String,
+}
+
+fn handle_paired_route(
+    stream: &mut TcpStream,
+    context: &ServerContext,
+    request: &HttpRequest,
+    path: &str,
+    peer: SocketAddr,
+) {
+    match (request.method.as_str(), path) {
+        ("GET", "/v2/hello") | ("HEAD", "/v2/hello") => handle_hello(stream, context, request),
+        ("POST", "/v2/pair") => handle_pair(stream, context, request, peer),
+        ("POST", "/v2/save") => handle_authenticated_save(stream, context, request),
+        ("GET", _) | ("HEAD", _) | ("POST", _) => write_response(
+            stream,
+            404,
+            "Not Found",
+            "text/plain; charset=utf-8",
+            b"Not Found",
+        ),
+        _ => write_response(
+            stream,
+            405,
+            "Method Not Allowed",
+            "text/plain; charset=utf-8",
+            b"Method Not Allowed",
+        ),
+    }
+}
+
+/// An unauthenticated caller gets protocol facts only. A stable host identifier
+/// handed to anything that can reach the port is a tracking value for a machine
+/// that joins many networks, and nothing needs it before pairing — the identity
+/// arrives in the pairing payload, and after that it is already saved.
+///
+/// `time` is public on purpose: a host with a wrong clock rejects every upload,
+/// and because authentication failures are opaque by design that would
+/// otherwise be undiagnosable.
+fn handle_hello(stream: &mut TcpStream, context: &ServerContext, request: &HttpRequest) {
+    let identity = context.host.identity();
+    let mut body = serde_json::json!({
+        "v": PROTOCOL_VERSION,
+        "schemaVersions": SUPPORTED_SCHEMA_VERSIONS,
+        "features": ["pages", "pairing-v2"],
+        "time": unix_millis().to_string(),
+    });
+
+    if let Some(device) = authenticate(context, request) {
+        body["hostId"] = identity.host_id.clone().into();
+        body["name"] = identity.display_name.clone().into();
+        body["platform"] = PLATFORM.into();
+        let text = body.to_string();
+        write_response_with_headers(
+            stream,
+            200,
+            "OK",
+            "application/json; charset=utf-8",
+            text.as_bytes(),
+            &host_proof(&device, 200),
+        );
+        return;
+    }
+
+    write_response(
+        stream,
+        200,
+        "OK",
+        "application/json; charset=utf-8",
+        body.to_string().as_bytes(),
+    );
+}
+
+fn handle_pair(
+    stream: &mut TcpStream,
+    context: &ServerContext,
+    request: &HttpRequest,
+    peer: SocketAddr,
+) {
+    let refuse = |stream: &mut TcpStream| {
+        // Denied, expired, reused, unsigned, and wrong all answer the same, so a
+        // caller cannot tell them apart.
+        write_response(
+            stream,
+            403,
+            "Forbidden",
+            "text/plain; charset=utf-8",
+            b"Pairing refused",
+        );
+    };
+
+    let Ok(body) = serde_json::from_slice::<PairRequestBody>(&request.body) else {
+        refuse(stream);
+        return;
+    };
+    let Some(pair_mac) = request.header(HEADER_PAIR_MAC) else {
+        refuse(stream);
+        return;
+    };
+    if !device_id_is_safe(&body.device_id) || body.host_id != context.host.host_id() {
+        refuse(stream);
+        return;
+    }
+
+    match context.host.complete_pairing(
+        &body.device_id,
+        &body.device_name,
+        &body.platform,
+        &peer.ip().to_string(),
+        pair_mac,
+    ) {
+        PairOutcome::Approved {
+            host_id,
+            pair_response_mac,
+        } => {
+            let identity = context.host.identity();
+            let response = serde_json::json!({
+                "v": PROTOCOL_VERSION,
+                "hostId": host_id,
+                "name": identity.display_name,
+                "platform": PLATFORM,
+            })
+            .to_string();
+            // The secret itself is never sent. Both sides derive it from the
+            // pairing secret that travelled screen-to-camera.
+            write_response_with_headers(
+                stream,
+                200,
+                "OK",
+                "application/json; charset=utf-8",
+                response.as_bytes(),
+                &[("X-GoghMode-Pair-Mac".to_owned(), pair_response_mac)],
+            );
+        }
+        PairOutcome::Refused => refuse(stream),
+    }
+}
+
+fn handle_authenticated_save(
+    stream: &mut TcpStream,
+    context: &ServerContext,
+    request: &HttpRequest,
+) {
+    let Some(device) = authenticate(context, request) else {
+        // One generic answer for every authentication failure, so nothing is
+        // learned from which check rejected the request.
+        write_response(
+            stream,
+            401,
+            "Unauthorized",
+            "text/plain; charset=utf-8",
+            b"Unauthorized",
+        );
+        return;
+    };
+
+    // Only now is the body interpreted. Hashing is cheap and parsing is not, so
+    // an unauthenticated caller must never reach `serde_json`.
+    let snapshot = match serde_json::from_slice::<DrawingSnapshot>(&request.body) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            respond_to_device(
+                stream,
+                &device,
+                400,
+                "Bad Request",
+                format!("could not parse the drawing: {error}"),
+            );
+            return;
+        }
+    };
+    if let Err(reason) = validate_snapshot(&snapshot) {
+        respond_to_device(stream, &device, 400, "Bad Request", reason);
+        return;
+    }
+
+    match write_page(&snapshot, &context.drawings_dir) {
+        Ok(_) => write_response_with_headers(
+            stream,
+            200,
+            "OK",
+            "application/json; charset=utf-8",
+            br#"{"ok":true}"#,
+            &host_proof(&device, 200),
+        ),
+        Err(_) => respond_to_device(
+            stream,
+            &device,
+            500,
+            "Internal Server Error",
+            "could not write the drawing".to_owned(),
+        ),
+    }
+}
+
+fn respond_to_device(
+    stream: &mut TcpStream,
+    device: &AuthenticatedDevice,
+    status: u16,
+    reason: &str,
+    message: String,
+) {
+    eprintln!("goghmode: rejected upload: {message}");
+    write_response_with_headers(
+        stream,
+        status,
+        reason,
+        "text/plain; charset=utf-8",
+        message.as_bytes(),
+        &host_proof(device, status),
+    );
+}
+
+/// Proves to the companion that this answer came from the host it paired with,
+/// bound to the nonce it just chose so it cannot be replayed from an earlier
+/// exchange. Every answer to an authenticated request carries it, including the
+/// failures — otherwise a rejection would be the one reply an impostor could
+/// forge.
+fn host_proof(device: &AuthenticatedDevice, status: u16) -> [(String, String); 1] {
+    [(
+        "X-GoghMode-Host-Mac".to_owned(),
+        response_mac(&device.secret, &device.nonce, status),
+    )]
+}
+
+/// The order is the security property. A device must be known, its clock close
+/// enough, and its signature right, all before anything mutates state or the
+/// body is interpreted. Recording the timestamp comes last because it is a
+/// write, and an unauthenticated caller must never cause one.
+fn authenticate(context: &ServerContext, request: &HttpRequest) -> Option<AuthenticatedDevice> {
+    let device_id = request.header(HEADER_DEVICE)?;
+    if !device_id_is_safe(device_id) {
+        return None;
+    }
+    let timestamp: u128 = request.header(HEADER_TIMESTAMP)?.parse().ok()?;
+    let nonce = request.header(HEADER_NONCE)?;
+    let candidate = request.header(HEADER_MAC)?;
+    let secret = context.host.device_secret(device_id)?;
+
+    if unix_millis().abs_diff(timestamp) > TIMESTAMP_TOLERANCE_MILLIS {
+        return None;
+    }
+    if !upload_mac_matches(
+        &secret,
+        device_id,
+        timestamp,
+        nonce,
+        &context.host.host_id(),
+        &sha256_hex(&request.body),
+        candidate,
+    ) {
+        return None;
+    }
+    // Strictly increasing per device, persisted, so a captured request cannot be
+    // replayed — not even into a freshly restarted host.
+    if !context.host.accept_timestamp(device_id, timestamp) {
+        return None;
+    }
+
+    Some(AuthenticatedDevice {
+        secret,
+        nonce: nonce.to_owned(),
+    })
+}
+
 struct HttpRequest {
     method: String,
     raw_path: String,
+    headers: Vec<(String, String)>,
     body: Vec<u8>,
+}
+
+impl HttpRequest {
+    /// Header names are matched lowercased because a client may send any casing
+    /// and two clients here are written in different languages.
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(header_name, _)| header_name == name)
+            .map(|(_, value)| value.as_str())
+    }
 }
 
 /// Reads until `want` more bytes are buffered, tolerating the interruptions a
@@ -262,10 +601,14 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, &'static str
     let mut request_parts = request_line.split_whitespace();
     let method = request_parts.next().ok_or("malformed request line")?.to_owned();
     let raw_path = request_parts.next().ok_or("malformed request line")?.to_owned();
-    let content_length = lines
+    let headers: Vec<(String, String)> = lines
         .filter_map(|line| line.split_once(':'))
-        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
-        .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+        .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_owned()))
+        .collect();
+    let content_length = headers
+        .iter()
+        .find(|(name, _)| name == "content-length")
+        .and_then(|(_, value)| value.parse::<usize>().ok())
         .unwrap_or(0);
     if content_length > MAX_SAVE_BODY_BYTES {
         return Err("drawing is too large to upload");
@@ -282,6 +625,7 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, &'static str
     Ok(HttpRequest {
         method,
         raw_path,
+        headers,
         // A client may send more than Content-Length; take only what was declared
         // rather than treating the extra as a malformed request.
         body: bytes[body_start..expected_len].to_vec(),
@@ -448,7 +792,26 @@ fn asset_for_path<'a>(path: &str, route_prefix: &str) -> Option<(&'a [u8], &'sta
 }
 
 fn write_response(stream: &mut TcpStream, status: u16, reason: &str, mime_type: &str, body: &[u8]) {
-    write_head_response(stream, status, reason, mime_type, body.len());
+    write_response_with_headers(stream, status, reason, mime_type, body, &[]);
+}
+
+fn write_response_with_headers(
+    stream: &mut TcpStream,
+    status: u16,
+    reason: &str,
+    mime_type: &str,
+    body: &[u8],
+    extra_headers: &[(String, String)],
+) {
+    let _ = write!(
+        stream,
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {mime_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n",
+        body.len()
+    );
+    for (name, value) in extra_headers {
+        let _ = write!(stream, "{name}: {value}\r\n");
+    }
+    let _ = write!(stream, "\r\n");
     let _ = stream.write_all(body);
     let _ = stream.flush();
     let _ = stream.shutdown(Shutdown::Both);

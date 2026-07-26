@@ -1,10 +1,13 @@
 mod app;
 mod app_install;
+mod crypto;
 mod drawing;
 mod export;
+mod host;
 mod mobile_server;
 mod pages;
 mod prompt;
+mod protocol;
 mod skill;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -100,11 +103,21 @@ fn drawings_dir_in_home(home_dir: &std::path::Path) -> PathBuf {
 
 fn run_app(drawings_dir: PathBuf) -> anyhow::Result<()> {
     let native_options = native_options();
+    let goghmode_dir = host::goghmode_dir(&home::home_dir().unwrap_or_else(std::env::temp_dir));
+    // Loading fails only when there is no secure random source. Starting anyway
+    // would mean a host that cannot pair and cannot say why, so this is loud.
+    let host = host::SharedHost::load(&goghmode_dir)?;
 
     eframe::run_native(
         "GoghMode",
         native_options,
-        Box::new(move |_creation_context| Ok(Box::new(app::GoghModeApp::new(drawings_dir)))),
+        Box::new(move |_creation_context| {
+            Ok(Box::new(app::GoghModeApp::new(
+                drawings_dir,
+                host,
+                goghmode_dir,
+            )))
+        }),
     )
     .map_err(|error| anyhow::anyhow!("{error}"))?;
     Ok(())
