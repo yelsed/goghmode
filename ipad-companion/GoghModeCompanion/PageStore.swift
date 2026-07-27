@@ -42,7 +42,7 @@ struct NotebookPage: Codable, Equatable, Identifiable {
 }
 
 /// A stack, in drawing-set terms: a lettered series of sheets. Series live only
-/// on the iPad — the Mac keeps one flat `pages/` directory and the wire format
+/// on the iPad — the host keeps one flat `pages/` directory and the wire format
 /// does not know they exist.
 struct PageSeries: Codable, Equatable, Hashable, Identifiable {
     let id: String
@@ -72,9 +72,9 @@ enum RegisterEntry: Identifiable, Equatable {
     }
 }
 
-/// The iPad's own copy of every page. This is the write that makes work survive —
-/// the Mac holds a mirror, so a page drawn while the Mac is closed is still here
-/// when it comes back.
+/// The iPad's own copy of every page. This is the write that makes work
+/// survive — the host holds a mirror, so a page drawn while it is closed is
+/// still here when it comes back.
 @MainActor
 final class PageStore: ObservableObject {
     @Published private(set) var pages: [NotebookPage] = []
@@ -165,10 +165,45 @@ final class PageStore: ObservableObject {
     /// Named rather than implied: the open sheet is addressed by id, so an in-flight
     /// stroke can never land on whichever page the register happens to have
     /// selected.
+    ///
+    /// An empty drawing arriving for a sheet that has strokes is refused. Nobody
+    /// erases seventeen strokes by drawing, so in practice that only ever means
+    /// the canvas reported its own loading as an edit — which emptied several
+    /// sheets, on the iPad and on the Mac, before the canvas stopped doing it.
+    /// Erasing on purpose goes through `clear`.
     func update(_ pageID: String, with drawing: PKDrawing) {
         guard let index = pages.firstIndex(where: { $0.id == pageID }) else { return }
+        if drawing.strokes.isEmpty && !pages[index].isEmpty { return }
         pages[index].drawingData = drawing.dataRepresentation()
         pages[index].updatedAt = Date()
+        save()
+    }
+
+    /// Erasing a sheet on purpose — the one path allowed to empty one that has
+    /// strokes on it.
+    func clear(_ pageID: String) {
+        guard let index = pages.firstIndex(where: { $0.id == pageID }) else { return }
+        pages[index].drawingData = PKDrawing().dataRepresentation()
+        pages[index].updatedAt = Date()
+        save()
+    }
+
+    /// Takes a sheet off this iPad. The host keeps its own copy: deleting here
+    /// says nothing about `pages/` on the Mac, and the register would be lying
+    /// if it implied otherwise.
+    ///
+    /// The register is never left with nothing to open, so emptying it hands
+    /// back a fresh sheet the way a new install does.
+    func delete(_ pageID: String) {
+        guard pages.contains(where: { $0.id == pageID }) else { return }
+        pages.removeAll { $0.id == pageID }
+        discardEmptySeries()
+        if pages.isEmpty {
+            appendPage()
+        }
+        if selectedPageID == pageID {
+            selectedPageID = pages.first?.id ?? ""
+        }
         save()
     }
 

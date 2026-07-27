@@ -14,13 +14,15 @@ minimum.
 ## Layout
 Setup until paired, then a `NavigationStack` whose root is the register.
 
-- **Setup** — a text field for the Mac's mobile URL, persisted in
-  `@AppStorage("goghModeEndpoint")`; `@AppStorage("goghModePaired")` records that the
-  user pressed through, so a half-typed address does not throw them into the app.
-  Reachable again later as a settings sheet.
+- **Setup** — the host list (`HostListView`). Pairing scans a QR code from the
+  desktop's Devices panel, or takes the same payload pasted as text. `HostStore`
+  keeps the saved hosts; their keys are in the Keychain, non-syncing. Reachable
+  again later as a settings sheet. The old URL field is gone: it could only create
+  unauthenticated links, which [ADR-0006](../../decisions/0006-paired-devices-over-shared-url-token.md)
+  retires. An endpoint saved by an earlier build is adopted into the list instead.
 - **Register** (root, `RegisterView`) — the overview. Head rule naming the stamped
   sheet, then a ruled index: one line per sheet or series, columns `SHEET`, `NAME`,
-  `UPDATED`, `STROKES`, `CLAUDE`. Toolbar carries **New sheet** and **Settings** —
+  `UPDATED`, `STROKES`, `AGENT`. Toolbar carries **New sheet** and **Settings** —
   new sheets are made here and nowhere else. Dragging one line onto another files
   both into a series; a series line pushes `SeriesView`, the same index scoped to it.
 - **Canvas** (`CanvasView`, pushed) — a full-bleed `PKCanvasView` with the system
@@ -75,10 +77,24 @@ carries `NSAllowsLocalNetworking` and `NSLocalNetworkUsageDescription`, both
 required for plain-HTTP LAN traffic.
 
 ## Auth & access
-None beyond the secret URL. No discovery, no Bonjour, no `NWBrowser`, no QR code —
-the user pastes the URL the Mac shows. `GoghModeEndpoint` requires http or https
-plus a host, then appends `save` unless the path already ends in `/save`, so both
-`http://ip:8787/{token}/` and the full `.../save` URL work. `file://` is rejected.
+Two kinds of saved host, and the interface says which is which.
+
+**Paired** (`credential == .paired`). The device holds a key derived during
+pairing, never received, kept in the Keychain as
+`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` so it does not travel to
+another device through a backup. Every upload is signed, and **the reply must be
+signed back before the app reports success** — a machine that merely answers at
+the saved address cannot pass for the paired host. Failing that check is its own
+status, `wrongHost`, deliberately not merged into `Offline`, because "offline"
+invites a retry and this must not be retried into.
+
+**Legacy** (`credential == .legacyURL`). The original secret URL, kept so an
+endpoint saved by an older build is not stranded — it is adopted into the host
+list on first launch. `GoghModeEndpoint` still requires http or https plus a host,
+then appends `save` unless the path already ends in `/save`. Labelled
+"unauthenticated link" in the list rather than dressed up.
+
+No discovery, no Bonjour, no `NWBrowser`. Pairing carries the address.
 
 ## Data
 
@@ -142,7 +158,7 @@ Errors map to actions, not codes:
 
 | State | Behaviour |
 | --- | --- |
-| Setup | URL field, nothing else. No canvas until an endpoint is stored. |
+| Setup | Host list and pairing. No canvas until a host is selected. |
 | Idle | Green dot, canvas ready. |
 | Waiting | Orange dot during the 600 ms debounce. |
 | Saving | Orange dot, request in flight. |
@@ -167,7 +183,10 @@ Shipped. Only remaining work is listed.
 ## Tasks
 - [ ] Skip the upload when the drawing has not changed since the last successful one
       — the cheapest fix for the resend cost.
-- [ ] Replace URL paste with QR scanning; it also removes the stale-port trap.
+- [x] Replace URL paste with QR scanning. **The scanner compiles but has not been
+      run on a device** — pasting the payload is the tested path.
+- [ ] Update a paired host's address when it moves, rather than needing a re-pair.
+      The identity already survives the move; only the stored address does not.
 
 ## Open questions
 - Should stroke ids survive edits? Page identity is now stable — a client-minted

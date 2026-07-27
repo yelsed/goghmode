@@ -10,7 +10,7 @@ struct RegisterView: View {
     @ObservedObject var store: PageStore
     @ObservedObject var uploader: UploadController
 
-    let endpointText: String
+    let destination: UploadController.Destination
     let onOpen: (String) -> Void
     let onNew: () -> Void
     let onSettings: () -> Void
@@ -20,6 +20,9 @@ struct RegisterView: View {
     /// Sheets with a stamp request in flight. The control is disabled while it is
     /// out, so a second press cannot race the first.
     @State private var stamping: Set<String> = []
+    /// The sheet waiting on an answer to "delete this?". Deleting is the one
+    /// action here with nothing behind it, so it is the one that asks.
+    @State private var deleting: NotebookPage?
 
     /// Read through the preview cache rather than `page.isEmpty`, which would decode
     /// every stored drawing again on every rebuild.
@@ -60,8 +63,8 @@ struct RegisterView: View {
         // been forgotten. Without this the stamp control is drawn on an optimistic
         // guess and then vanishes the first time it is pressed, which reads as the
         // app breaking.
-        .task(id: uploader.macIsKnown) {
-            await uploader.learnWhatTheMacAccepts(endpointText: endpointText)
+        .task(id: uploader.hostIsKnown) {
+            await uploader.learnWhatTheHostAccepts(destination)
         }
         .navigationDestination(item: $openSeries) { series in
             SeriesView(
@@ -78,6 +81,7 @@ struct RegisterView: View {
         .sheet(item: $renaming) { target in
             RenameSheet(target: target, onSave: commitRename)
         }
+        .deleteSheetDialog(sheet: $deleting) { store.delete($0.id) }
     }
 
     /// The line that answers "what is the agent reading?" without opening anything,
@@ -138,8 +142,8 @@ struct RegisterView: View {
         if let message = uploader.pagesUnsupportedMessage {
             return message
         }
-        if uploader.macIsKnown && !uploader.pinningSupported {
-            return "\(UploadController.macAppOutOfDate) Until then your agent reads whichever sheet you drew on last."
+        if uploader.hostIsKnown && !uploader.pinningSupported {
+            return "\(UploadController.hostAppOutOfDate) Until then your agent reads whichever sheet you drew on last."
         }
         return nil
     }
@@ -201,7 +205,7 @@ struct RegisterView: View {
     }
 
     private func stampState(for page: NotebookPage) -> StampState {
-        if !uploader.pinningSupported && uploader.macIsKnown {
+        if !uploader.pinningSupported && uploader.hostIsKnown {
             return .unavailable
         }
         if stamping.contains(page.id) {
@@ -220,7 +224,7 @@ struct RegisterView: View {
 
         if uploader.pinningSupported {
             Button {
-                Task { _ = await uploader.promote(page.id, endpointText: endpointText) }
+                Task { _ = await uploader.promote(page.id, to: destination) }
             } label: {
                 Label("Send this one now", systemImage: "paperplane")
             }
@@ -233,6 +237,12 @@ struct RegisterView: View {
                 Label("Take out of series", systemImage: "rectangle.stack.badge.minus")
             }
         }
+
+        Button(role: .destructive) {
+            deleting = page
+        } label: {
+            Label("Delete sheet", systemImage: "trash")
+        }
     }
 
     private func commitRename(_ target: RenameTarget, _ name: String) {
@@ -243,7 +253,7 @@ struct RegisterView: View {
             // the next save of that sheet. Send it now when it is the stamped one, so
             // the register and the Mac never disagree about the name the agent reads.
             if page.id == store.pinnedPageID {
-                Task { _ = await uploader.promote(page.id, endpointText: endpointText) }
+                Task { _ = await uploader.promote(page.id, to: destination) }
             }
         case .series(let series):
             store.renameSeries(series.id, to: name)
@@ -261,10 +271,10 @@ struct RegisterView: View {
             // the canvas has not had open since the Mac last saw it — would otherwise
             // leave the agent reading something else.
             if target != nil {
-                await uploader.send(page.snapshot, endpointText: endpointText)
+                await uploader.send(page.snapshot, to: destination)
             }
 
-            let accepted = await uploader.pin(target, endpointText: endpointText)
+            let accepted = await uploader.pin(target, to: destination)
             stamping.remove(page.id)
             if accepted {
                 store.recordPin(target)
@@ -272,6 +282,41 @@ struct RegisterView: View {
             // A refusal leaves the stamp exactly where the Mac says it is, and the
             // reason is already on the head line — the control must never show a
             // state the Mac has not agreed to.
+        }
+    }
+}
+
+extension View {
+    /// The confirmation both registers use, so the loose list and a series ask
+    /// the same question in the same words.
+    ///
+    /// It says what deleting does *not* do on purpose: the host keeps its own
+    /// copy, and a register that implied otherwise would be promising a reach it
+    /// does not have.
+    func deleteSheetDialog(
+        sheet: Binding<NotebookPage?>,
+        onDelete: @escaping (NotebookPage) -> Void
+    ) -> some View {
+        confirmationDialog(
+            "Delete this sheet?",
+            isPresented: Binding(
+                get: { sheet.wrappedValue != nil },
+                set: { if !$0 { sheet.wrappedValue = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: sheet.wrappedValue
+        ) { page in
+            Button("Delete \(page.title)", role: .destructive) {
+                onDelete(page)
+                sheet.wrappedValue = nil
+            }
+            Button("Keep it", role: .cancel) {
+                sheet.wrappedValue = nil
+            }
+        } message: { page in
+            Text(
+                "\(page.title) is removed from this iPad and cannot be brought back. The Mac keeps the copy it already has."
+            )
         }
     }
 }
@@ -724,6 +769,8 @@ struct SeriesView: View {
     let onRename: (NotebookPage) -> Void
     let isStamping: (NotebookPage) -> Bool
 
+    @State private var deleting: NotebookPage?
+
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
@@ -749,6 +796,9 @@ struct SeriesView: View {
                         Button { store.removeFromSeries(page.id) } label: {
                             Label("Take out of series", systemImage: "rectangle.stack.badge.minus")
                         }
+                        Button(role: .destructive) { deleting = page } label: {
+                            Label("Delete sheet", systemImage: "trash")
+                        }
                     }
                 }
             }
@@ -771,10 +821,11 @@ struct SeriesView: View {
                 }
             }
         }
+        .deleteSheetDialog(sheet: $deleting) { store.delete($0.id) }
     }
 
     private func stampState(for page: NotebookPage) -> StampState {
-        if !uploader.pinningSupported && uploader.macIsKnown {
+        if !uploader.pinningSupported && uploader.hostIsKnown {
             return .unavailable
         }
         if isStamping(page) {

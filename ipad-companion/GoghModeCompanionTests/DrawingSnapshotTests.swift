@@ -32,7 +32,7 @@ final class DrawingSnapshotTests: XCTestCase {
     }
 
     /// Rounding runs before clamping precisely so a value at the edge cannot be
-    /// rounded up past the canvas, which the Mac rejects with a 400.
+    /// rounded up past the canvas, which the host rejects with a 400.
     func testRoundingNeverPushesPointsOutsideTheCanvas() throws {
         let canvas = CGSize(width: 320, height: 240)
         let snapshot = DrawingSnapshot.fromPencilDrawing(
@@ -128,7 +128,7 @@ final class DrawingSnapshotTests: XCTestCase {
         XCTAssertEqual(page["title"] as? String, "Server sketch")
     }
 
-    func testDowngradedSnapshotDropsThePageForAMacThatPredatesThem() throws {
+    func testDowngradedSnapshotDropsThePageForAHostThatPredatesThem() throws {
         let snapshot = DrawingSnapshot.empty(
             canvasSize: CGSize(width: 320, height: 240),
             page: PageRef(id: "note-1", title: "Server sketch")
@@ -148,7 +148,7 @@ final class DrawingSnapshotTests: XCTestCase {
         let capabilities = try JSONDecoder().decode(GoghModeCapabilities.self, from: json)
 
         XCTAssertTrue(capabilities.supportsPages)
-        XCTAssertFalse(GoghModeCapabilities.pagelessMac.supportsPages)
+        XCTAssertFalse(GoghModeCapabilities.pagelessHost.supportsPages)
     }
 
     @MainActor
@@ -321,11 +321,11 @@ final class DrawingSnapshotTests: XCTestCase {
             client: GoghModeClient(session: URLSession(configuration: configuration))
         )
 
-        let accepted = await controller.pin("note-1", endpointText: "http://10.0.0.1:8787/abc123/")
+        let accepted = await controller.pin("note-1", to: legacyDestination())
 
         XCTAssertFalse(accepted)
         XCTAssertFalse(controller.pinningSupported)
-        XCTAssertTrue(controller.macIsKnown)
+        XCTAssertTrue(controller.hostIsKnown)
         if case .failed(let message) = controller.status {
             XCTFail("a capability verdict must not read as an upload failure: \(message)")
         }
@@ -342,11 +342,30 @@ final class DrawingSnapshotTests: XCTestCase {
             client: GoghModeClient(session: URLSession(configuration: configuration))
         )
 
-        _ = await controller.pin("note-1", endpointText: "http://10.0.0.1:8787/abc123/")
+        _ = await controller.pin("note-1", to: legacyDestination())
 
         XCTAssertTrue(controller.pagesSupported)
         XCTAssertTrue(controller.pinningSupported)
-        XCTAssertFalse(controller.macIsKnown, "a failed probe must not count as an answer")
+        XCTAssertFalse(controller.hostIsKnown, "a failed probe must not count as an answer")
+    }
+
+    /// A host saved the old way: the probe still decides what it can do, which is
+    /// what these two tests are about. A paired host answers that question by
+    /// existing, so it would not exercise the probe at all.
+    private func legacyDestination(
+        _ address: String = "http://10.0.0.1:8787/abc123/"
+    ) -> UploadController.Destination {
+        UploadController.Destination(
+            host: SavedHost(
+                id: "legacy-test",
+                name: "Desktop",
+                platform: "unknown",
+                address: address,
+                credential: .legacyURL(address)
+            ),
+            secret: nil,
+            deviceID: "ipad-test"
+        )
     }
 
     @MainActor

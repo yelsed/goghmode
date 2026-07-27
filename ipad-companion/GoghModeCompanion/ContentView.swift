@@ -7,9 +7,9 @@ import SwiftUI
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("goghModeEndpoint") private var endpointText = ""
-    @AppStorage("goghModePaired") private var paired = false
     @StateObject private var uploader = UploadController()
     @StateObject private var pageStore = PageStore()
+    @StateObject private var hostStore = HostStore()
     @State private var openPageID: String?
     @State private var showingSettings = false
 
@@ -17,45 +17,54 @@ struct ContentView: View {
     /// so every screen in the stack measures its table the same way.
     @ScaledMetric(relativeTo: .body) private var columnUnit: CGFloat = 100
 
-    private var endpoint: GoghModeEndpoint? {
-        GoghModeEndpoint(endpointText)
+    /// Resolved once, so a host and a credential can never be paired up wrongly
+    /// somewhere further down the view tree.
+    private var destination: UploadController.Destination? {
+        guard let host = hostStore.selectedHost else { return nil }
+        return UploadController.Destination(
+            host: host,
+            secret: hostStore.secret(for: host.id),
+            deviceID: hostStore.deviceID
+        )
     }
 
     var body: some View {
         ZStack {
             Sheet.ground.ignoresSafeArea()
 
-            if endpoint == nil || !paired {
-                SetupView(
-                    endpointText: $endpointText,
-                    isValid: endpoint != nil,
-                    onDone: { paired = true }
-                )
+            if let destination {
+                register(sending: destination)
             } else {
-                register
+                HostListView(hostStore: hostStore)
             }
         }
         .environment(\.registerColumns, RegisterColumns(scale: columnUnit / 100))
+        .onAppear {
+            // An endpoint saved by an older build becomes the first entry in the
+            // host list, so updating the app does not look like losing the
+            // connection.
+            hostStore.adoptLegacyEndpoint(endpointText)
+        }
         .onChange(of: scenePhase) { _, newPhase in
-            // Coming back to the app is the moment the Mac is most likely to have
-            // been reopened — or updated — so both the pending upload and what the
-            // Mac claims to accept are worth asking about again.
+            // Coming back to the app is the moment the host is most likely to
+            // have been reopened — or updated — so both the pending upload and
+            // what it claims to accept are worth asking about again.
             if newPhase == .active {
-                uploader.forgetWhatTheMacAccepts()
+                uploader.forgetWhatTheHostAccepts()
                 uploader.retryIfOffline()
             }
         }
-        .onChange(of: endpointText) { _, _ in
-            uploader.forgetWhatTheMacAccepts()
+        .onChange(of: hostStore.selectedHostID) { _, _ in
+            uploader.forgetWhatTheHostAccepts()
         }
     }
 
-    private var register: some View {
+    private func register(sending destination: UploadController.Destination) -> some View {
         NavigationStack {
             RegisterView(
                 store: pageStore,
                 uploader: uploader,
-                endpointText: endpointText,
+                destination: destination,
                 onOpen: { openPageID = $0 },
                 onNew: { openPageID = pageStore.addPage().id },
                 onSettings: { showingSettings = true }
@@ -65,16 +74,12 @@ struct ContentView: View {
                     store: pageStore,
                     uploader: uploader,
                     pageID: pageID,
-                    endpointText: endpointText
+                    destination: destination
                 )
             }
         }
         .sheet(isPresented: $showingSettings) {
-            SetupView(
-                endpointText: $endpointText,
-                isValid: endpoint != nil,
-                onDone: { showingSettings = false }
-            )
+            HostListView(hostStore: hostStore)
         }
     }
 }
@@ -86,7 +91,7 @@ struct CanvasView: View {
     @ObservedObject var uploader: UploadController
 
     let pageID: String
-    let endpointText: String
+    let destination: UploadController.Destination
 
     @Environment(\.scenePhase) private var scenePhase
     @State private var drawing = PKDrawing()
@@ -116,7 +121,7 @@ struct CanvasView: View {
                 PencilCanvasView(drawing: $drawing, reloadSignal: $reloadSignal) { newDrawing, newCanvasSize in
                     canvasSize = newCanvasSize == .zero ? geometry.size : newCanvasSize
                     store.update(pageID, with: newDrawing)
-                    uploader.schedule(snapshot: snapshot(of: newDrawing), endpointText: endpointText)
+                    uploader.schedule(snapshot: snapshot(of: newDrawing), to: destination)
                 }
                 .ignoresSafeArea(edges: .bottom)
                 .onAppear { canvasSize = geometry.size }
@@ -189,7 +194,7 @@ struct CanvasView: View {
     }
 
     private func stampState(for page: NotebookPage) -> StampState {
-        if !uploader.pinningSupported && uploader.macIsKnown {
+        if !uploader.pinningSupported && uploader.hostIsKnown {
             return .unavailable
         }
         if stamping {
@@ -207,16 +212,16 @@ struct CanvasView: View {
     }
 
     private func uploadCurrentSheet() {
-        uploader.uploadNow(snapshot: snapshot(of: drawing), endpointText: endpointText)
+        uploader.uploadNow(snapshot: snapshot(of: drawing), to: destination)
     }
 
     private func clearSheet() {
         drawing = PKDrawing()
         reloadSignal += 1
-        store.update(pageID, with: drawing)
+        store.clear(pageID)
         uploader.uploadNow(
             snapshot: DrawingSnapshot.empty(canvasSize: canvasSize, page: page?.pageRef),
-            endpointText: endpointText
+            to: destination
         )
     }
 
@@ -237,10 +242,10 @@ struct CanvasView: View {
             // Sent before pinned, so the Mac is holding this sheet by the time it is
             // told to follow it.
             if target != nil {
-                await uploader.send(snapshot(of: drawing), endpointText: endpointText)
+                await uploader.send(snapshot(of: drawing), to: destination)
             }
 
-            let accepted = await uploader.pin(target, endpointText: endpointText)
+            let accepted = await uploader.pin(target, to: destination)
             stamping = false
             if accepted {
                 store.recordPin(target)
@@ -273,6 +278,12 @@ struct StatusBadge: View {
                         .foregroundStyle(Sheet.onGroundSecondary)
                         .lineLimit(1)
                 }
+                if case .wrongHost(let message) = status {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(Sheet.stamp)
+                        .lineLimit(2)
+                }
             }
             .padding(.horizontal, 8)
             .frame(height: 44)
@@ -286,7 +297,7 @@ struct StatusBadge: View {
         switch status {
         case .idle, .saved: Sheet.review
         case .waiting, .saving: Sheet.inkLabel
-        case .failed: Sheet.stamp
+        case .failed, .wrongHost: Sheet.stamp
         }
     }
 }
@@ -294,77 +305,6 @@ struct StatusBadge: View {
 /// Pairing. Rebuilt because the old screen put `.secondary` grey on a white
 /// ground, which is unreadable at a desk: every string here is full-weight ink,
 /// and the address sits on paper so it reads as a field to fill in.
-struct SetupView: View {
-    @Binding var endpointText: String
-    let isValid: Bool
-    let onDone: () -> Void
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("GoghMode")
-                        .font(.largeTitle.weight(.bold))
-                        .foregroundStyle(Sheet.onGround)
-                    Text("Write here. The Mac keeps every sheet, and your agent reads the one you stamp.")
-                        .font(.callout)
-                        .foregroundStyle(Sheet.onGroundSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.bottom, 28)
-
-                VStack(spacing: 0) {
-                    Rectangle().fill(Sheet.rule).frame(height: Sheet.hair)
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        BlockLabel(text: "Mac address")
-                        TextField("http://192.168.1.10:8787/token/", text: $endpointText)
-                            .font(.callout.monospaced())
-                            .foregroundStyle(Sheet.ink)
-                            .keyboardType(.URL)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .frame(minHeight: 44)
-
-                        if !endpointText.isEmpty && !isValid {
-                            Text("That is not a full address. Copy the mobile URL from the Mac — it starts with http:// and ends in a token.")
-                                .font(.footnote)
-                                .foregroundStyle(Sheet.stamp)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                    .padding(14)
-                }
-                .background(Sheet.paper)
-                .overlay {
-                    Rectangle().strokeBorder(Sheet.edge, lineWidth: Sheet.hair)
-                }
-
-                Text("Open GoghMode on the Mac and press Copy mobile URL.")
-                    .font(.subheadline)
-                    .foregroundStyle(Sheet.onGroundSecondary)
-                    .padding(.top, 12)
-
-                Button(action: onDone) {
-                    Text(isValid ? "Open the register" : "Waiting for an address")
-                        .font(.callout.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 50)
-                        .background(isValid ? Sheet.ink : Sheet.edge)
-                        .foregroundStyle(isValid ? Sheet.paper : Sheet.onGround)
-                        .clipShape(RoundedRectangle(cornerRadius: Sheet.controlRadius))
-                }
-                .disabled(!isValid)
-                .padding(.top, 28)
-            }
-            .padding(Sheet.margin)
-            .frame(maxWidth: 640, alignment: .leading)
-            .frame(maxWidth: .infinity)
-        }
-        .background(Sheet.ground)
-    }
-}
-
 #Preview {
     ContentView()
 }

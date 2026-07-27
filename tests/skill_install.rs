@@ -42,7 +42,7 @@ fn install_skill_writes_claude_skill_contents() {
     assert!(contents.contains("drawings/latest.json"));
     assert!(contents.contains("drawings/latest.svg"));
     assert!(contents.contains("drawings/latest.png"));
-    assert!(contents.contains("Use whichever is newer"));
+    assert!(contents.contains("Use whichever `updatedAt` is larger"));
 }
 
 #[test]
@@ -53,9 +53,26 @@ fn claude_skill_picks_the_newest_drawing_rather_than_the_project_local_one() {
     let contents = std::fs::read_to_string(path).unwrap();
 
     assert!(contents.contains("GoghMode always writes to the same place"));
-    assert!(contents.contains("Use whichever is newer"));
+    assert!(contents.contains("Use whichever `updatedAt` is larger"));
     assert!(
         !contents.contains("First try the project-local files"),
         "skill must not tell the agent to prefer project-local files by existence"
+    );
+}
+
+/// A stamped sheet rewrites `latest.*` without being redrawn, so file times say
+/// a day-old sketch arrived a minute ago. The skill has to read the stamp the
+/// exporter wrote instead.
+#[test]
+fn claude_skill_judges_age_by_the_stamp_rather_than_the_file_time() {
+    let temp_home = tempfile::tempdir().unwrap();
+
+    let path = install_skill(SkillTarget::Claude, temp_home.path()).unwrap();
+    let contents = std::fs::read_to_string(path).unwrap();
+
+    assert!(contents.contains("`updatedAt` field inside `latest.json`"));
+    assert!(
+        !contents.contains("stat -f"),
+        "comparing modification times is the mistake this replaced"
     );
 }

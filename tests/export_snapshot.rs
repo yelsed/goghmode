@@ -7,8 +7,8 @@ mod export;
 #[path = "../src/pages.rs"]
 mod pages;
 
-use drawing::{Drawing, CURRENT_SCHEMA_VERSION, MAC_SCRATCH_PAGE_ID};
-use export::{snapshot_to_rgba, write_snapshot};
+use drawing::{Drawing, CURRENT_SCHEMA_VERSION, DESKTOP_SCRATCH_PAGE_ID};
+use export::{snapshot_to_rgba, write_artifacts};
 use pages::{list_pages, page_id_is_safe, write_page};
 use std::fs;
 
@@ -20,7 +20,7 @@ fn multi_point_stroke_writes_json_svg_and_png() {
     drawing.push_point(40.0, 42.0, 0.5, 2);
     drawing.finish_stroke();
 
-    let files = write_snapshot(&drawing.snapshot(), temp.path()).unwrap();
+    let files = write_artifacts(&drawing.snapshot(), temp.path(), "latest", "drawings/", None).unwrap();
 
     assert!(files.json.exists());
     assert!(files.svg.exists());
@@ -43,7 +43,7 @@ fn empty_drawing_writes_valid_white_svg_and_png() {
     let temp = tempfile::tempdir().unwrap();
     let drawing = Drawing::new(100.0, 80.0);
 
-    let files = write_snapshot(&drawing.snapshot(), temp.path()).unwrap();
+    let files = write_artifacts(&drawing.snapshot(), temp.path(), "latest", "drawings/", None).unwrap();
 
     assert!(files.json.exists());
     assert!(files.svg.exists());
@@ -61,7 +61,7 @@ fn resized_drawing_omits_out_of_bounds_points_from_svg_but_keeps_json_stroke() {
     drawing.finish_stroke();
     drawing.set_canvas_size(50.0, 50.0);
 
-    let files = write_snapshot(&drawing.snapshot(), temp.path()).unwrap();
+    let files = write_artifacts(&drawing.snapshot(), temp.path(), "latest", "drawings/", None).unwrap();
 
     let svg = fs::read_to_string(&files.svg).unwrap();
     assert!(svg.contains("<circle"));
@@ -73,11 +73,11 @@ fn resized_drawing_omits_out_of_bounds_points_from_svg_but_keeps_json_stroke() {
 }
 
 #[test]
-fn write_snapshot_leaves_no_temporary_files_after_success() {
+fn writing_latest_leaves_no_temporary_files_after_success() {
     let temp = tempfile::tempdir().unwrap();
     let drawing = Drawing::new(25.0, 25.0);
 
-    write_snapshot(&drawing.snapshot(), temp.path()).unwrap();
+    write_artifacts(&drawing.snapshot(), temp.path(), "latest", "drawings/", None).unwrap();
 
     let temporary_count = fs::read_dir(temp.path())
         .unwrap()
@@ -87,8 +87,16 @@ fn write_snapshot_leaves_no_temporary_files_after_success() {
     assert_eq!(temporary_count, 0);
 }
 
+/// The constant lost its Mac-specific name; the value must not follow it. It is
+/// a directory name under `drawings/pages/`, so changing it orphans every
+/// scratch page already on disk — silent data loss wearing a cleanup's clothes.
 #[test]
-fn mac_canvas_writes_its_own_page_instead_of_only_latest() {
+fn desktop_scratch_page_keeps_its_on_disk_identifier() {
+    assert_eq!(DESKTOP_SCRATCH_PAGE_ID, "mac-scratch");
+}
+
+#[test]
+fn desktop_canvas_writes_its_own_page_instead_of_only_latest() {
     let temp = tempfile::tempdir().unwrap();
     let mut drawing = Drawing::new(60.0, 40.0);
     drawing.begin_stroke(5.0, 5.0, 0.5, 1);
@@ -97,7 +105,7 @@ fn mac_canvas_writes_its_own_page_instead_of_only_latest() {
 
     write_page(&drawing.snapshot(), temp.path()).unwrap();
 
-    let page_dir = temp.path().join("pages").join(MAC_SCRATCH_PAGE_ID);
+    let page_dir = temp.path().join("pages").join(DESKTOP_SCRATCH_PAGE_ID);
     assert!(page_dir.join("page.json").exists());
     assert!(page_dir.join("page.svg").exists());
     assert!(page_dir.join("page.png").exists());
@@ -165,7 +173,7 @@ fn png_export_keeps_the_stroke_colour_the_svg_already_honoured() {
 
     let mut snapshot = drawing.snapshot();
     snapshot.strokes[0].color = "#cc0000".to_owned();
-    write_snapshot(&snapshot, temp.path()).unwrap();
+    write_artifacts(&snapshot, temp.path(), "latest", "drawings/", None).unwrap();
 
     let image = snapshot_to_rgba(&snapshot);
 
@@ -224,4 +232,46 @@ fn sheet_numbers_follow_creation_order_not_the_order_pages_were_last_edited() {
 
     assert_eq!(before, after);
     assert_eq!(before.len(), 3);
+}
+
+#[test]
+fn stamping_a_sheet_keeps_the_time_it_was_drawn() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut drawing = Drawing::new(40.0, 30.0);
+    drawing.begin_stroke(5.0, 5.0, 0.5, 1);
+    drawing.push_point(20.0, 20.0, 0.5, 2);
+    drawing.finish_stroke();
+
+    let mut snapshot = drawing.snapshot();
+    snapshot.page = Some(drawing::PageRef {
+        id: "drawn-earlier".to_owned(),
+        title: None,
+    });
+    write_page(&snapshot, temp.path()).unwrap();
+
+    // Long enough that a stamp minting its own time cannot land on the same
+    // millisecond as the page it is mirroring.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    pages::promote_page(temp.path(), "drawn-earlier").unwrap();
+
+    let latest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(temp.path().join("latest.json")).unwrap()).unwrap();
+    // Read the page's own copy rather than what `write_page` returned: with
+    // nothing pinned that return value is the mirror itself, so comparing
+    // against it compares `latest.json` with itself and passes either way.
+    let stored: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(
+            temp.path()
+                .join("pages")
+                .join("drawn-earlier")
+                .join("page.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        latest["updatedAt"], stored["updatedAt"],
+        "a stamped sheet must keep its own time, or an old sketch reads as freshly drawn"
+    );
 }

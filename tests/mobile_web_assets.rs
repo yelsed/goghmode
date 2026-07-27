@@ -49,11 +49,11 @@ fn mobile_index_exports_existing_schema_contract() {
 fn mobile_index_can_send_snapshot_to_desktop_app() {
     let index = read_asset("mobile/index.html");
 
-    assert!(index.contains("Send to Mac"));
-    assert!(index.contains("async function sendToMac()"));
+    assert!(index.contains("Send to desktop"));
+    assert!(index.contains("async function sendToDesktop()"));
     assert!(index.contains("fetch(\"save\""));
     assert!(index.contains("method: \"POST\""));
-    assert!(index.contains("Saved to Mac"));
+    assert!(index.contains("Saved to desktop"));
 }
 #[test]
 fn mobile_index_uses_pointer_events_and_share_fallback() {
@@ -95,7 +95,9 @@ fn mobile_index_uses_polished_product_styling() {
 fn mobile_service_worker_caches_app_shell_only() {
     let service_worker = read_asset("mobile/service-worker.js");
 
-    assert!(service_worker.contains("goghmode-mobile-v1"));
+    // Bumped with the copy change: an installed progressive web app keeps serving
+    // the cached shell until the cache name moves.
+    assert!(service_worker.contains("goghmode-mobile-v2"));
     assert!(service_worker.contains("APP_SHELL"));
     assert!(service_worker.contains("manifest.webmanifest"));
     assert!(service_worker.contains("icon.svg"));

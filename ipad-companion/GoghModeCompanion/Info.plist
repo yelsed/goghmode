@@ -28,7 +28,9 @@
 		<true/>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>GoghMode sends your drawing to the Mac app on your local network.</string>
+	<string>GoghMode sends your drawing to the desktop app on your local network.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>GoghMode reads the pairing code shown by the desktop app. The camera is used for nothing else.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

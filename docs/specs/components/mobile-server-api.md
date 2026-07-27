@@ -41,10 +41,45 @@ before matching.
 | GET / HEAD | `{prefix}icon.svg` | `image/svg+xml` |
 | GET / HEAD | `{prefix}capabilities` | `{"schemaVersions":[1,2],"features":["pages"]}`, `application/json` |
 | GET / HEAD | `/{token}` (no trailing slash) | `308` redirect to `{prefix}` |
-| POST | `{prefix}save` | `200 {"ok":true}` · `400` with a reason · `500` on write failure |
+| POST | `{prefix}save` | `200 {"ok":true}` · `400` with a reason · `500` on write failure · **`403` once a device has been paired**, unless the legacy toggle is back on |
+| POST | `{prefix}pin`, `{prefix}promote` | As above, and closed by the same gate. An anonymous `pin` would choose what the agent reads without ever sending a stroke. |
 | POST | anything else | `405` |
 | Any other verb | any | `405` |
 | GET | unknown path | `404` |
+
+### Paired-device routes
+
+These sit **outside** the token prefix: a paired device authenticates by signature,
+so the path secret has no part to play.
+
+| Method | Path | Response |
+| --- | --- | --- |
+| GET / HEAD | `/v2/hello` | `{"v","schemaVersions","features","time"}`. A **signed** request additionally gets `hostId`, `name` and `platform` — an unauthenticated one never does, because a stable identifier handed to any scanner is a tracking value. |
+| POST | `/v2/pair` | `200` with `{"v","hostId","name","platform"}` and an `X-GoghMode-Pair-Mac` header · `403`, identical for denied, expired, reused, unsigned and wrong |
+| POST | `/v2/save` | `200 {"ok":true}` · `400` with a reason · `401`, identical for every authentication failure · `500`. Every answer carries `X-GoghMode-Host-Mac`. |
+| POST | `/v2/pin` | The authenticated twin of `{prefix}pin`. Same signing and same answers as `/v2/save`. |
+| POST | `/v2/promote` | The authenticated twin of `{prefix}promote`. |
+
+Stamping goes through the same door as sending, and for the same reason:
+`pin` names the sheet the agent reads, so choosing it is as consequential as
+choosing what it says.
+
+Request headers on `/v2/save` (and optionally `/v2/hello`):
+
+| Header | Contents |
+| --- | --- |
+| `X-GoghMode-Device` | `deviceId`, `[A-Za-z0-9_-]{1,64}` |
+| `X-GoghMode-Timestamp` | Milliseconds since the Unix epoch |
+| `X-GoghMode-Nonce` | 16 random bytes, hex |
+| `X-GoghMode-Mac` | `HMAC-SHA256(deviceSecret, deviceId ‖ timestamp ‖ nonce ‖ hostId ‖ SHA-256(body))` |
+
+Fields inside a signed message are **length-prefixed**, not separated by a
+delimiter: a device name is arbitrary user text and could otherwise be crafted so
+that one field list reads as another.
+
+`time` in `/v2/hello` is public on purpose. A host whose clock is wrong rejects
+every upload, and because authentication failures are deliberately opaque that
+would otherwise be undiagnosable — the companion compares clocks and says so.
 
 Every response sets `Cache-Control: no-store`.
 

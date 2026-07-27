@@ -141,7 +141,7 @@ Then paste the output into Claude Code.
 3. Click `Copy mobile URL` in the desktop app.
 4. Send that URL to the phone, or type the `Mobile: http://...` URL into the phone browser.
 5. Draw on the phone.
-6. Tap `Send to Mac`.
+6. Tap `Send to desktop`.
 7. In Claude Code, type:
 
    ```text
@@ -152,7 +152,7 @@ The mobile URL includes a persistent random secret path. It only works while Gog
 
 Mobile buttons:
 
-- `Send to Mac` writes the drawing into the Mac drawings directory.
+- `Send to desktop` writes the drawing into the host's drawings directory.
 - `Share PNG` opens the phone share sheet when the browser supports it.
 - `Export PNG`, `Export SVG`, and `Export JSON` keep files on the phone.
 - `Undo`, `Clear`, and `Brush` work locally in the phone browser.
@@ -176,6 +176,6 @@ Quit any already-running GoghMode window, then reopen it.
 - **No drawing files exist yet:** draw one stroke or click `Save`.
 - **`/goghmode` is unavailable:** run `goghmode install-skill --target claude`, then restart Claude Code.
 - **The phone cannot open the mobile URL:** keep GoghMode open, keep both devices on the same Wi-Fi, and use the exact URL from `Copy mobile URL`.
-- **`Send to Mac` fails:** keep the desktop app open and reload the phone page from the current mobile URL.
+- **`Send to desktop` fails:** keep the desktop app open and reload the phone page from the current mobile URL.
 - **Image paste does not work in an AI interface:** use `/goghmode`, `Send to Claude`, or `goghmode prompt --target claude`.
 - **The drawing is too thick or too thin:** adjust `Brush` before drawing.

@@ -128,13 +128,6 @@ pub fn snapshot_to_rgba(snapshot: &DrawingSnapshot) -> RgbaImage {
     image
 }
 
-pub fn write_snapshot(
-    snapshot: &DrawingSnapshot,
-    drawings_dir: impl AsRef<Path>,
-) -> anyhow::Result<ExportedFiles> {
-    write_artifacts(snapshot, drawings_dir, "latest", "drawings/", None)
-}
-
 /// Writes the JSON, SVG and PNG for one snapshot into `directory` as
 /// `<stem>.{json,svg,png}`. `link_prefix` is the project-relative directory the
 /// `files` block in the JSON should point at, so a consumer reading the JSON can

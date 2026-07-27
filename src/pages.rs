@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::drawing::{CanvasSize, DrawingSnapshot, PageRef, Stroke, LEGACY_PAGE_ID};
-use crate::export::{write_artifacts, write_snapshot, ExportedFiles};
+use crate::export::{write_artifacts, ExportedFiles};
 
 const PAGES_DIRECTORY: &str = "pages";
 const PAGE_STEM: &str = "page";
@@ -196,10 +196,16 @@ pub fn set_pin(drawings_dir: impl AsRef<Path>, page_id: Option<&str>) -> anyhow:
 
 /// Points `latest.*` at a stored page without touching the pin — the "send this
 /// one now" action.
+///
+/// The page's own stamp is carried across, as `write_page` does. Minting a new
+/// one instead made every stamped sheet read as freshly drawn: `/goghmode`
+/// judges age from `updatedAt`, so an hours-old sketch was described as if it
+/// had just been sent, and a companion that had quietly stopped uploading still
+/// looked connected.
 pub fn promote_page(drawings_dir: impl AsRef<Path>, page_id: &str) -> anyhow::Result<ExportedFiles> {
     let drawings_dir = drawings_dir.as_ref();
-    let snapshot = load_page_snapshot(drawings_dir, page_id)?;
-    write_snapshot(&snapshot, drawings_dir)
+    let (snapshot, updated_at) = load_page(drawings_dir, page_id)?;
+    write_artifacts(&snapshot, drawings_dir, "latest", "drawings/", Some(updated_at))
 }
 
 /// Rebuilt from the directory rather than maintained incrementally: no drift,
@@ -226,7 +232,7 @@ pub fn rebuild_index(drawings_dir: impl AsRef<Path>) -> anyhow::Result<PathBuf> 
     Ok(index_path)
 }
 
-/// Newest first, which is the order the Mac browser shows them in.
+/// Newest first, which is the order the desktop page browser shows them in.
 pub fn list_pages(drawings_dir: impl AsRef<Path>) -> Vec<PageEntry> {
     let directory = pages_dir(drawings_dir.as_ref());
     let Ok(entries) = fs::read_dir(&directory) else {
@@ -265,18 +271,20 @@ pub fn list_pages(drawings_dir: impl AsRef<Path>) -> Vec<PageEntry> {
     pages
 }
 
-/// Reloads a stored page so it can be promoted back to `latest.*`.
-pub fn load_page_snapshot(
+/// Reloads a stored page, with the stamp it was written under, so it can be
+/// promoted back to `latest.*` without losing when it was drawn.
+pub fn load_page(
     drawings_dir: impl AsRef<Path>,
     page_id: &str,
-) -> anyhow::Result<DrawingSnapshot> {
+) -> anyhow::Result<(DrawingSnapshot, u128)> {
     if !page_id_is_safe(page_id) {
         anyhow::bail!("Unusable page id");
     }
     let path = page_dir(drawings_dir.as_ref(), page_id).join(format!("{PAGE_STEM}.json"));
-    read_stored_page(&path)
-        .map(StoredPage::into_snapshot)
-        .ok_or_else(|| anyhow::anyhow!("Could not read {}", path.display()))
+    let stored =
+        read_stored_page(&path).ok_or_else(|| anyhow::anyhow!("Could not read {}", path.display()))?;
+    let updated_at = stored.updated_at;
+    Ok((stored.into_snapshot(), updated_at))
 }
 
 /// Creation time of a page directory, in unix milliseconds. Not every platform

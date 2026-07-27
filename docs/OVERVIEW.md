@@ -32,7 +32,7 @@ See [desktop-canvas](specs/pages/desktop-canvas.md).
 ### 🟢 Phone and tablet sketchpad in the browser
 The desktop app serves a small drawing web app over the local network — no install,
 no app store. Open the URL the Mac shows, draw with a finger or stylus, tap
-**Send to Mac**. It installs to the home screen as a progressive web app.
+**Send to desktop**. It installs to the home screen as a progressive web app.
 See [mobile-web-canvas](specs/pages/mobile-web-canvas.md).
 
 ### 🟢 Native iPad companion (Apple Pencil)

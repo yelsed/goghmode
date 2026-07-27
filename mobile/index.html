@@ -235,12 +235,12 @@
         <p class="eyebrow">Local sketchpad</p>
         <h1>GoghMode</h1>
       </div>
-      <p id="status" role="status" aria-live="polite">Draw on the paper. Send to Mac when ready.</p>
+      <p id="status" role="status" aria-live="polite">Draw on the paper. Send to desktop when ready.</p>
     </header>
 
     <section class="toolbar" aria-label="Drawing controls">
       <div class="primary-actions">
-        <button type="button" id="send-mac" class="primary">Send to Mac</button>
+        <button type="button" id="send-desktop" class="primary">Send to desktop</button>
         <button type="button" id="share-png">Share PNG</button>
       </div>
       <div class="secondary-actions">
@@ -269,7 +269,7 @@
     const LOGICAL_FILES = { json: "drawings/latest.json", svg: "drawings/latest.svg", png: "drawings/latest.png" };
     const PAGE_ID_KEY = "goghmode-page-id";
 
-    // This companion ships inside the Mac binary, so it always matches its own
+    // This companion ships inside the desktop binary, so it always matches its own
     // server and can send a page without probing for support. One browser keeps
     // one page: it is the quick-capture surface, not the notebook.
     function pageId() {
@@ -286,7 +286,7 @@
     const status = document.getElementById("status");
     const brush = document.getElementById("brush");
     const brushValue = document.getElementById("brush-value");
-    const sendMacButton = document.getElementById("send-mac");
+    const sendDesktopButton = document.getElementById("send-desktop");
     const strokes = [];
     let activeStroke = null;
     let activePointerId = null;
@@ -498,9 +498,9 @@
       }, "image/png");
     }
 
-    async function sendToMac() {
-      status.textContent = "Sending to Mac...";
-      sendMacButton.disabled = true;
+    async function sendToDesktop() {
+      status.textContent = "Sending to desktop...";
+      sendDesktopButton.disabled = true;
       try {
         const response = await fetch("save", {
           method: "POST",
@@ -508,14 +508,14 @@
           body: JSON.stringify(snapshot())
         });
         if (!response.ok) {
-          status.textContent = "Send failed. Keep GoghMode open on the Mac.";
+          status.textContent = "Send failed. Keep GoghMode open on the desktop.";
           return;
         }
-        status.textContent = "Saved to Mac. In your coding agent, type /goghmode.";
+        status.textContent = "Saved to desktop. In your coding agent, type /goghmode.";
       } catch (error) {
         status.textContent = "Send failed. Check same Wi-Fi and keep GoghMode open.";
       } finally {
-        sendMacButton.disabled = false;
+        sendDesktopButton.disabled = false;
       }
     }
 
@@ -587,8 +587,8 @@
       shareCanvasPng();
     });
 
-    sendMacButton.addEventListener("click", () => {
-      sendToMac();
+    sendDesktopButton.addEventListener("click", () => {
+      sendToDesktop();
     });
 
     document.addEventListener("selectstart", (event) => {

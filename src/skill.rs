@@ -14,8 +14,8 @@ description: Use when the user asks to inspect a sketch, drawing, whiteboard, di
 
 Use this skill when the user wants you to inspect the latest GoghMode sketch.
 
-GoghMode always writes to the same place, whether it was started from a terminal, Spotlight, or
-Raycast:
+GoghMode always writes to the same place, whether it was started from a terminal, Spotlight,
+Raycast, or a Linux application launcher:
 
 - `~/Pictures/GoghMode/drawings/latest.json`
 - `~/Pictures/GoghMode/drawings/latest.svg`
@@ -25,23 +25,42 @@ Raycast:
 
 1. Read `latest.json` and `latest.svg` from that directory. If image inspection is available,
    inspect `latest.png` too.
-2. If the file is more than a few hours old, say so before describing it, so the user knows you are
-   not looking at what they just drew.
+2. Judge the drawing's age from the `updatedAt` field inside `latest.json`, in unix milliseconds —
+   not from the file's modification time. The files are rewritten whenever a sheet is stamped, so
+   an mtime from a minute ago can belong to a sketch drawn yesterday.
+
+   ```bash
+   python3 -c "import json,datetime;print(datetime.datetime.fromtimestamp(int(json.load(open('$HOME/Pictures/GoghMode/drawings/latest.json'))['updatedAt'])/1000))"
+   ```
+
+   If that time is more than a few hours ago, name it before describing the drawing, so the user
+   knows you are not looking at what they just drew. A sketch that is much older than the user
+   expects usually means a paired device has stopped reaching the host — say so, and point them at
+   the Devices view, which names when each device was last seen and why the last attempt was
+   turned away.
 3. Describe the drawing in plain language and connect it to the user's current question.
 
 ## If a project-local `drawings/` directory also exists
 
 Older versions wrote to `drawings/` relative to the terminal's working directory, and
 `--drawings-dir` can still redirect output on purpose. So a stale `drawings/latest.*` may be sitting
-in the project. Never assume it is the current one:
+in the project. Never assume it is the current one — compare their `updatedAt` fields, for the same
+reason mtimes are not trusted above:
 
 ```bash
-stat -f "%Sm %N" drawings/latest.json ~/Pictures/GoghMode/drawings/latest.json 2>/dev/null
+python3 -c "
+import json,os
+for path in ('drawings/latest.json', os.path.expanduser('~/Pictures/GoghMode/drawings/latest.json')):
+    try:
+        print(json.load(open(path))['updatedAt'], path)
+    except OSError:
+        pass
+"
 ```
 
-Use whichever is newer, and say which one you read.
+Use whichever `updatedAt` is larger, and say which one you read.
 
-If neither location has the files, ask the user to open `goghmode`, draw once, and release the pointer or tap Send to Mac.
+If neither location has the files, ask the user to open `goghmode`, draw once, and release the pointer or tap Send to desktop.
 "#;
 
 pub fn skill_path(target: SkillTarget, home_dir: &Path) -> PathBuf {

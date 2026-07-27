@@ -4,8 +4,95 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Installs the host so the desktop environment can launch it. Each platform
+/// keeps its own idea of what "installed" means — an application bundle on
+/// macOS, a desktop entry on Linux — and this is the only place that has to
+/// know which one is in play.
+#[allow(dead_code)] // Called from main.rs; the test include compiles this module alone.
+pub fn install_app(home_dir: &Path, executable_path: &Path) -> anyhow::Result<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        install_macos_app(home_dir, executable_path)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        linux::install(home_dir, executable_path)
+    }
+}
+
 pub fn app_bundle_path(home_dir: &Path) -> PathBuf {
     home_dir.join("Applications").join("GoghMode.app")
+}
+
+/// A macOS build compiles all of this and calls none of it, and the tests
+/// exercise it on whichever platform they run on. One allow covers the lot
+/// rather than one per item.
+#[allow(dead_code)]
+pub mod linux {
+    use super::*;
+
+    const ICON_SVG: &[u8] = include_bytes!("../mobile/icon.svg");
+
+    pub fn desktop_entry_path(home_dir: &Path) -> PathBuf {
+        home_dir
+            .join(".local")
+            .join("share")
+            .join("applications")
+            .join("goghmode.desktop")
+    }
+
+    pub fn desktop_icon_path(home_dir: &Path) -> PathBuf {
+        home_dir
+            .join(".local")
+            .join("share")
+            .join("icons")
+            .join("hicolor")
+            .join("scalable")
+            .join("apps")
+            .join("goghmode.svg")
+    }
+
+    /// Writes a user-level desktop entry and its icon. Everything it touches is
+    /// under `~/.local/share`, which Omarchy does not manage — nothing here
+    /// reads or writes `~/.local/share/omarchy/`.
+    ///
+    /// The binary is not copied. On Linux the user built it and chose where it
+    /// lives, so the entry points at it where it already is.
+    /// ponytail: absolute path in `Exec`, so moving the binary means running
+    /// `install-app` again. Copying it in would need its own update story.
+    pub fn install(home_dir: &Path, executable_path: &Path) -> anyhow::Result<PathBuf> {
+        let entry_path = desktop_entry_path(home_dir);
+        let icon_path = desktop_icon_path(home_dir);
+        for directory in [entry_path.parent(), icon_path.parent()]
+            .into_iter()
+            .flatten()
+        {
+            fs::create_dir_all(directory)?;
+        }
+
+        fs::write(&icon_path, ICON_SVG)?;
+        fs::write(&entry_path, desktop_entry(executable_path))?;
+
+        Ok(entry_path)
+    }
+
+    /// `Exec` is quoted because an unquoted path containing a space reads as an
+    /// executable followed by an argument.
+    fn desktop_entry(executable_path: &Path) -> String {
+        format!(
+            r#"[Desktop Entry]
+Type=Application
+Name=GoghMode
+Comment=Local sketchpad for terminal AI workflows
+Exec="{}"
+Icon=goghmode
+Terminal=false
+Categories=Graphics;Utility;
+StartupWMClass=GoghMode
+"#,
+            executable_path.display()
+        )
+    }
 }
 
 pub fn install_macos_app(home_dir: &Path, executable_path: &Path) -> anyhow::Result<PathBuf> {

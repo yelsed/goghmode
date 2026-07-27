@@ -1,13 +1,17 @@
 mod app;
 mod app_install;
+mod crypto;
 mod drawing;
 mod export;
+mod host;
 mod mobile_server;
 mod pages;
 mod prompt;
+mod protocol;
 mod skill;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use mobile_server::StartOutcome;
 use prompt::PromptTarget;
 use skill::SkillTarget;
 use std::path::PathBuf;
@@ -72,8 +76,8 @@ fn run() -> anyhow::Result<()> {
             let home_dir =
                 home::home_dir().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
             let executable_path = std::env::current_exe()?;
-            let path = app_install::install_macos_app(&home_dir, &executable_path)?;
-            println!("Installed macOS app at {}", path.display());
+            let path = app_install::install_app(&home_dir, &executable_path)?;
+            println!("Installed GoghMode at {}", path.display());
             Ok(())
         }
         None => run_app(cli.drawings_dir.unwrap_or_else(default_drawings_dir)),
@@ -100,15 +104,50 @@ fn drawings_dir_in_home(home_dir: &std::path::Path) -> PathBuf {
 
 fn run_app(drawings_dir: PathBuf) -> anyhow::Result<()> {
     let native_options = native_options();
+    let goghmode_dir = host::goghmode_dir(&home::home_dir().unwrap_or_else(std::env::temp_dir));
+    // Loading fails only when there is no secure random source. Starting anyway
+    // would mean a host that cannot pair and cannot say why, so this is loud.
+    let host = host::SharedHost::load(&goghmode_dir)?;
+
+    let bridge = match mobile_server::MobileServer::start(&drawings_dir, host.clone()) {
+        StartOutcome::Running(server) => app::Bridge::Serving(server),
+        // A second window would mean a second server competing for the same
+        // drawings directory, and every device has the first one's address
+        // saved. Hand over instead.
+        StartOutcome::AlreadyRunning => {
+            println!("GoghMode is already running on port {}.", mobile_server::DEFAULT_PORT);
+            return Ok(());
+        }
+        StartOutcome::PortHeldByAnother => app::Bridge::Unavailable(format!(
+            "Port {} is held by another program, so no device can reach this host. Free it, then reopen GoghMode.",
+            mobile_server::DEFAULT_PORT
+        )),
+    };
 
     eframe::run_native(
         "GoghMode",
         native_options,
-        Box::new(move |_creation_context| Ok(Box::new(app::GoghModeApp::new(drawings_dir)))),
+        Box::new(move |creation_context| {
+            app::install_theme(&creation_context.egui_ctx);
+            Ok(Box::new(app::GoghModeApp::new(
+                drawings_dir,
+                host,
+                goghmode_dir,
+                bridge,
+            )))
+        }),
     )
     .map_err(|error| anyhow::anyhow!("{error}"))?;
     Ok(())
 }
+
+// There is deliberately no "bring the running window forward" step here.
+//
+// `tell application "GoghMode" to activate` goes through LaunchServices, which
+// runs the bundle's launcher, which `nohup`s another `goghmode-bin`. That
+// instance finds the port taken, tries to be helpful, and activates again:
+// thirty-four processes inside ten seconds, measured. Exiting is the guarantee;
+// raising the window is not worth a spawn loop to get.
 
 fn native_options() -> eframe::NativeOptions {
     eframe::NativeOptions {
