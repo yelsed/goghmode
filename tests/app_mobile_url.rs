@@ -44,41 +44,52 @@ fn the_desktop_is_a_bridge_rather_than_a_drawing_surface() {
 }
 
 /// The appearance was unconditional because `configure_visuals` ran from `ui()`
-/// every frame and hard-set `Visuals::dark()`. Registering both palettes once is
-/// what lets the window follow the system instead.
+/// every frame and hard-set `Visuals::dark()`. Installing once is what makes it
+/// deliberate.
 #[test]
-fn the_theme_is_installed_once_and_follows_the_system() {
+fn the_theme_is_installed_once_and_pinned() {
     let source = app_source();
 
     assert!(source.contains("pub fn install_theme"));
-    assert!(source.contains("ThemePreference::System"));
-    assert!(source.contains("set_visuals_of(egui::Theme::Light"));
-    assert!(source.contains("set_visuals_of(egui::Theme::Dark"));
+    assert!(source.contains("ThemePreference::Light"));
     assert!(
         !source.contains("fn configure_visuals"),
-        "the per-frame hard-coded dark theme should be gone"
+        "the per-frame hard-coded theme should be gone"
+    );
+    assert!(
+        !source.contains("ThemePreference::System"),
+        "following the system needs the palette, the visuals and the clear \
+         colour to agree; two attempts at that shipped unreadable windows"
     );
 }
 
-/// One mark, both appearances. A stamp that shifts with the theme is not a mark.
+/// The bug that made half the window unreadable, and the one that source greps
+/// can actually catch.
+///
+/// egui was painting light the whole time — `dark_mode=false`,
+/// `panel_fill=#EDEAE4`, ink `#1A1917`. The black came from the window's clear
+/// colour, which is a separate thing from the panel fill and defaults dark. So
+/// paper-coloured ink landed on a black surface.
 #[test]
-fn the_issue_stamp_is_the_same_colour_in_both_appearances() {
+fn the_window_clear_colour_matches_the_ground() {
     let source = app_source();
-    let stamp_lines: Vec<&str> = source
-        .lines()
-        .filter(|line| {
-            let line = line.trim_start();
-            // The value lines only — not the struct's field declaration.
-            line.starts_with("stamp:") && line.contains("from_rgb")
-        })
-        .collect();
 
-    assert_eq!(stamp_lines.len(), 2, "one stamp colour per palette");
-    assert_eq!(
-        stamp_lines[0].trim(),
-        stamp_lines[1].trim(),
-        "the stamp must not change with the appearance"
+    assert!(
+        source.contains("fn clear_color"),
+        "without this the window paints its own background, and it is not paper"
     );
+    assert!(source.contains("sheet().ground.to_normalized_gamma_f32()"));
+}
+
+/// One palette. Two of them meant the palette, the visuals and the clear colour
+/// all had to agree, and they did not.
+#[test]
+fn there_is_exactly_one_palette() {
+    let source = app_source();
+
+    assert!(source.contains("const SET: Sheet"));
+    assert!(!source.contains("const DARK: Sheet"));
+    assert!(!source.contains("ui.visuals().dark_mode"));
 }
 
 /// Guards a bug that cost thirty-four processes in ten seconds.
@@ -100,23 +111,6 @@ fn a_second_launch_never_relaunches_the_application() {
 
     assert!(!code.contains("to activate"));
     assert!(!code.contains("osascript"));
-}
-
-/// The window once painted from both palettes at once: a dark panel behind
-/// white buttons and a white title block, with light-mode label grey on
-/// near-black. The cause was two sources of truth — `ctx.theme()` for the
-/// palette, the installed `Visuals` for everything egui draws itself.
-///
-/// Reading `dark_mode` off the visuals in play is what keeps them one.
-#[test]
-fn the_palette_follows_the_visuals_actually_being_painted() {
-    let source = app_source();
-
-    assert!(source.contains("ui.visuals().dark_mode"));
-    assert!(
-        !source.contains("ui.ctx().theme() =="),
-        "the palette must not be chosen independently of the installed visuals"
-    );
 }
 
 /// A QR code, a pairing payload and a device list are taller than the window.

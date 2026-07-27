@@ -26,10 +26,14 @@ const FILE_MANAGER_COMMAND: &str = if cfg!(target_os = "macos") {
 /// DESIGN.md and the iPad's `Sheet` tokens — the two surfaces are one set, so
 /// neither may carry a colour the other does not know about.
 ///
-/// Resolved per call rather than held as constants because the window follows
-/// the system appearance: paper in the light, and DESIGN.md's dark pairs
-/// otherwise. A register that stays bright white inside a dark desktop is the
-/// same "looks like two apps" problem in the other direction.
+/// One palette, not two.
+///
+/// A dark pair was tried and produced two rounds of unreadable windows, because
+/// the palette, egui's installed visuals and the window's clear colour are three
+/// separate things that all have to agree. They did not. A drawing set is paper
+/// — making that unconditional removes the disagreement rather than managing it.
+/// DESIGN.md's dark tokens are still there for whoever wants to do it properly,
+/// with a device in front of them.
 struct Sheet {
     ground: Color32,
     paper: Color32,
@@ -40,7 +44,7 @@ struct Sheet {
     stamp: Color32,
 }
 
-const LIGHT: Sheet = Sheet {
+const SET: Sheet = Sheet {
     ground: Color32::from_rgb(237, 234, 228),
     paper: Color32::from_rgb(255, 255, 255),
     edge: Color32::from_rgb(216, 212, 204),
@@ -50,33 +54,10 @@ const LIGHT: Sheet = Sheet {
     stamp: Color32::from_rgb(180, 51, 31),
 };
 
-const DARK: Sheet = Sheet {
-    ground: Color32::from_rgb(14, 13, 12),
-    paper: Color32::from_rgb(28, 27, 25),
-    edge: Color32::from_rgb(58, 55, 51),
-    rule: Color32::from_rgb(90, 86, 80),
-    ink: Color32::from_rgb(242, 239, 233),
-    ink_label: Color32::from_rgb(142, 136, 128),
-    // The stamp is the one colour that does not change. It is the mark, and a
-    // mark that shifts with the appearance is not a mark.
-    stamp: Color32::from_rgb(180, 51, 31),
-};
-
-/// Read from the visuals egui is *actually painting with*, not from
-/// `ctx.theme()`.
-///
-/// Those two can disagree, and when they did the window painted from both
-/// palettes at once: a dark panel behind white buttons and a white title block,
-/// with light-mode label grey on a near-black ground. Unreadable, and entirely
-/// self-inflicted. `dark_mode` is the same value egui used to draw the frame,
-/// so it cannot drift from it.
-fn sheet(ui: &egui::Ui) -> &'static Sheet {
-    if ui.visuals().dark_mode {
-        &DARK
-    } else {
-        &LIGHT
-    }
+fn sheet() -> &'static Sheet {
+    &SET
 }
+
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum View {
@@ -226,6 +207,15 @@ impl GoghModeApp {
 }
 
 impl eframe::App for GoghModeApp {
+    /// The window's clear colour, which is *not* the panel fill and defaults to
+    /// something dark. Leaving it alone is what put paper-coloured ink on a
+    /// black window: egui was painting light the whole time, but the surface
+    /// underneath it was not.
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        sheet().ground.to_normalized_gamma_f32()
+    }
+
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         ui.spacing_mut().item_spacing = Vec2::new(10.0, 10.0);
 
@@ -246,7 +236,7 @@ impl eframe::App for GoghModeApp {
                 // read as objects lying on it rather than panels in an app.
                 View::Register => {
                     egui::Frame::new()
-                        .fill(sheet(ui).ground)
+                        .fill(sheet().ground)
                         .inner_margin(egui::Margin::same(12))
                         .show(ui, |ui| self.draw_page_browser(ui));
                 }
@@ -266,7 +256,7 @@ impl GoghModeApp {
     /// they are one job — getting a device talking to this host — and putting
     /// Devices at the far bottom of the window made it unfindable.
     fn draw_header(&mut self, ui: &mut egui::Ui) {
-        let sheet = sheet(ui);
+        let sheet = sheet();
         egui::Frame::new()
             .fill(sheet.paper)
             .stroke(EguiStroke::new(1.0, sheet.edge))
@@ -318,8 +308,8 @@ impl GoghModeApp {
             Bridge::Unavailable(_) => ("\u{25cb}", "Connection \u{b7} not serving".to_owned()),
         };
         let tint = match &self.bridge {
-            Bridge::Serving(_) => sheet(ui).ink,
-            Bridge::Unavailable(_) => sheet(ui).stamp,
+            Bridge::Serving(_) => sheet().ink,
+            Bridge::Unavailable(_) => sheet().stamp,
         };
 
         ui.menu_button(
@@ -328,7 +318,7 @@ impl GoghModeApp {
             match &self.bridge {
                 Bridge::Serving(server) => {
                     let url = server.url().to_owned();
-                    ui.label(RichText::new("Mobile URL").size(11.0).color(sheet(ui).ink_label));
+                    ui.label(RichText::new("Mobile URL").size(11.0).color(sheet().ink_label));
                     ui.monospace(&url);
                     ui.add_space(6.0);
                     if ui.button("Copy mobile URL").clicked() {
@@ -342,7 +332,7 @@ impl GoghModeApp {
                     }
                 }
                 Bridge::Unavailable(reason) => {
-                    ui.label(RichText::new(reason.clone()).color(sheet(ui).stamp));
+                    ui.label(RichText::new(reason.clone()).color(sheet().stamp));
                 }
             }
         });
@@ -665,7 +655,7 @@ impl GoghModeApp {
                 RichText::new("CLAUDE READS")
                     .size(10.0)
                     .strong()
-                    .color(sheet(ui).ink_label),
+                    .color(sheet().ink_label),
             );
             match self.pinned_page_id.clone() {
                 Some(page_id) => {
@@ -673,7 +663,7 @@ impl GoghModeApp {
                         RichText::new(self.page_title(&page_id))
                             .size(13.0)
                             .strong()
-                            .color(sheet(ui).ink),
+                            .color(sheet().ink),
                     );
                     if ui.button("Lift stamp").clicked() {
                         self.stamp_page(None);
@@ -683,7 +673,7 @@ impl GoghModeApp {
                     ui.label(
                         RichText::new("whichever sheet was drawn on last")
                             .size(13.0)
-                            .color(sheet(ui).ink_label),
+                            .color(sheet().ink_label),
                     );
                 }
             }
@@ -737,10 +727,10 @@ fn draw_sheet_card(
 
     ui.allocate_ui(Vec2::new(card_width, THUMBNAIL_HEIGHT as f32 + 96.0), |ui| {
         egui::Frame::new()
-            .fill(sheet(ui).paper)
+            .fill(sheet().paper)
             .stroke(EguiStroke::new(
                 1.0,
-                if issued { sheet(ui).stamp } else { sheet(ui).edge },
+                if issued { sheet().stamp } else { sheet().edge },
             ))
             .corner_radius(egui::CornerRadius::same(2))
             .inner_margin(egui::Margin::same(0))
@@ -759,28 +749,28 @@ fn draw_sheet_card(
                     // Top rule of the title block.
                     let (rule, painter) =
                         ui.allocate_painter(Vec2::new(card_width, 1.0), Sense::hover());
-                    painter.rect_filled(rule.rect, 0.0, sheet(ui).rule);
+                    painter.rect_filled(rule.rect, 0.0, sheet().rule);
 
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
                         ui.add_space(10.0);
                         ui.vertical(|ui| {
-                            ui.label(RichText::new("SHEET").size(9.0).strong().color(sheet(ui).ink_label));
+                            ui.label(RichText::new("SHEET").size(9.0).strong().color(sheet().ink_label));
                             ui.label(
                                 RichText::new(format!("{number:02}"))
                                     .size(12.0)
                                     .monospace()
-                                    .color(sheet(ui).ink),
+                                    .color(sheet().ink),
                             );
                         });
                         ui.add_space(10.0);
                         ui.vertical(|ui| {
-                            ui.label(RichText::new("NAME").size(9.0).strong().color(sheet(ui).ink_label));
+                            ui.label(RichText::new("NAME").size(9.0).strong().color(sheet().ink_label));
                             ui.label(
                                 RichText::new(page.title.as_deref().unwrap_or(&page.page_id))
                                     .size(13.0)
                                     .strong()
-                                    .color(sheet(ui).ink),
+                                    .color(sheet().ink),
                             );
                         });
                     });
@@ -795,7 +785,7 @@ fn draw_sheet_card(
                                 page.stroke_count
                             ))
                             .size(11.0)
-                            .color(sheet(ui).ink_label),
+                            .color(sheet().ink_label),
                         );
                     });
 
@@ -810,7 +800,7 @@ fn draw_sheet_card(
                             action = SheetAction::Send;
                         }
                         if issued {
-                            ui.label(RichText::new("ISSUED").size(11.0).strong().color(sheet(ui).stamp));
+                            ui.label(RichText::new("ISSUED").size(11.0).strong().color(sheet().stamp));
                         }
                     });
                     ui.add_space(8.0);
@@ -864,9 +854,11 @@ impl StatusBar {
 /// unconditional — and why the paper register sat inside a navy shell looking
 /// like a different application.
 pub fn install_theme(ctx: &egui::Context) {
-    ctx.set_visuals_of(egui::Theme::Light, chrome(&LIGHT, egui::Visuals::light()));
-    ctx.set_visuals_of(egui::Theme::Dark, chrome(&DARK, egui::Visuals::dark()));
-    ctx.set_theme(egui::ThemePreference::System);
+    ctx.set_visuals(chrome(&SET, egui::Visuals::light()));
+    // Pinned, not "system". Following the system needs three things to agree —
+    // the palette, egui's visuals, and the window's clear colour — and the one
+    // that does not announce itself is the clear colour.
+    ctx.set_theme(egui::ThemePreference::Light);
 }
 
 /// egui's own chrome — panels, buttons, menus — dressed in the same palette the
