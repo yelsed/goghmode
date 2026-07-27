@@ -62,8 +62,16 @@ const DARK: Sheet = Sheet {
     stamp: Color32::from_rgb(180, 51, 31),
 };
 
+/// Read from the visuals egui is *actually painting with*, not from
+/// `ctx.theme()`.
+///
+/// Those two can disagree, and when they did the window painted from both
+/// palettes at once: a dark panel behind white buttons and a white title block,
+/// with light-mode label grey on a near-black ground. Unreadable, and entirely
+/// self-inflicted. `dark_mode` is the same value egui used to draw the frame,
+/// so it cannot drift from it.
 fn sheet(ui: &egui::Ui) -> &'static Sheet {
-    if ui.ctx().theme() == egui::Theme::Dark {
+    if ui.visuals().dark_mode {
         &DARK
     } else {
         &LIGHT
@@ -223,17 +231,28 @@ impl eframe::App for GoghModeApp {
 
         self.draw_header(ui);
         ui.add_space(10.0);
-        match self.view {
-            // The register is paper on a paper-coloured ground, so sheets read
-            // as objects lying on it rather than panels in an app.
-            View::Register => {
-                egui::Frame::new()
-                    .fill(sheet(ui).ground)
-                    .inner_margin(egui::Margin::same(12))
-                    .show(ui, |ui| self.draw_page_browser(ui));
-            }
-            View::Devices => self.draw_devices(ui),
-        }
+
+        // The body scrolls inside what is left after the footer is reserved.
+        // Without this, a long Devices panel — a QR code, a pairing payload, a
+        // device list — simply pushed the footer and the status line off the
+        // bottom of the window, and nothing could reach them.
+        const FOOTER_HEIGHT: f32 = 62.0;
+        let body_height = (ui.available_height() - FOOTER_HEIGHT).max(0.0);
+        egui::ScrollArea::vertical()
+            .max_height(body_height)
+            .auto_shrink([false, false])
+            .show(ui, |ui| match self.view {
+                // The register is paper on a paper-coloured ground, so sheets
+                // read as objects lying on it rather than panels in an app.
+                View::Register => {
+                    egui::Frame::new()
+                        .fill(sheet(ui).ground)
+                        .inner_margin(egui::Margin::same(12))
+                        .show(ui, |ui| self.draw_page_browser(ui));
+                }
+                View::Devices => self.draw_devices(ui),
+            });
+
         ui.add_space(8.0);
         self.draw_footer(ui);
         ui.add_space(6.0);
@@ -926,7 +945,7 @@ fn short_host_id(host_id: &str) -> String {
 /// Renders the pairing payload as a QR code. Typing a 32-character secret on a
 /// tablet is the kind of friction that stops people pairing at all.
 fn qr_texture(ctx: &egui::Context, text: &str) -> Option<TextureHandle> {
-    const MODULE_PIXELS: usize = 4;
+    const MODULE_PIXELS: usize = 3;
     const QUIET_MODULES: usize = 4;
 
     let code = qrcode::QrCode::new(text.as_bytes()).ok()?;

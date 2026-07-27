@@ -101,3 +101,31 @@ fn a_second_launch_never_relaunches_the_application() {
     assert!(!code.contains("to activate"));
     assert!(!code.contains("osascript"));
 }
+
+/// The window once painted from both palettes at once: a dark panel behind
+/// white buttons and a white title block, with light-mode label grey on
+/// near-black. The cause was two sources of truth — `ctx.theme()` for the
+/// palette, the installed `Visuals` for everything egui draws itself.
+///
+/// Reading `dark_mode` off the visuals in play is what keeps them one.
+#[test]
+fn the_palette_follows_the_visuals_actually_being_painted() {
+    let source = app_source();
+
+    assert!(source.contains("ui.visuals().dark_mode"));
+    assert!(
+        !source.contains("ui.ctx().theme() =="),
+        "the palette must not be chosen independently of the installed visuals"
+    );
+}
+
+/// A QR code, a pairing payload and a device list are taller than the window.
+/// Without somewhere to scroll they pushed the footer and the status line off
+/// the bottom, where nothing could reach them.
+#[test]
+fn the_body_scrolls_so_the_footer_cannot_be_pushed_off_screen() {
+    let source = app_source();
+
+    assert!(source.contains("ScrollArea::vertical()"));
+    assert!(source.contains("FOOTER_HEIGHT"));
+}
