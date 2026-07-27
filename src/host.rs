@@ -146,7 +146,21 @@ pub struct HostState {
     pub identity: HostIdentity,
     pub registry: Registry,
     pub pairing: PairingState,
+    pub last_refusal: Option<Refusal>,
     registry_path: PathBuf,
+}
+
+/// Why the most recent signed request was turned away. The wire answer stays a
+/// bare 401 so nothing is learned from which check rejected it; this is the
+/// same event told to the person sitting at the host, who otherwise has no way
+/// to tell a stale address from a drifting clock from a revoked device.
+///
+/// Deliberately not persisted: it describes a link right now, not a fact about
+/// the registry, and a reason surviving a restart would outlive its truth.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Refusal {
+    pub at: u128,
+    pub reason: String,
 }
 
 /// Shared between the server thread and the user interface. The condition
@@ -183,6 +197,7 @@ impl SharedHost {
                 identity,
                 registry,
                 pairing: PairingState::Idle,
+                last_refusal: None,
                 registry_path,
             }),
             approval: Condvar::new(),
@@ -376,6 +391,28 @@ impl SharedHost {
         // export files that are already being written. Batch it if it ever shows.
         let _ = state.save_registry();
         true
+    }
+
+    /// Remembers why a signed request was turned away, and says it on stderr
+    /// for a host started from a terminal. An app bundle has nowhere to send
+    /// stderr, which is why the interface reads this back rather than relying
+    /// on the printed line.
+    pub fn record_refusal(&self, reason: String) {
+        eprintln!("goghmode: refused a signed request: {reason}");
+        self.locked().last_refusal = Some(Refusal {
+            at: unix_millis(),
+            reason,
+        });
+    }
+
+    pub fn last_refusal(&self) -> Option<Refusal> {
+        self.locked().last_refusal.clone()
+    }
+
+    /// A device that gets through clears the complaint, so a fixed link stops
+    /// showing the failure that preceded it.
+    pub fn clear_refusal(&self) {
+        self.locked().last_refusal = None;
     }
 
     fn locked(&self) -> std::sync::MutexGuard<'_, HostState> {

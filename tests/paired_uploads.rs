@@ -699,3 +699,53 @@ fn a_paired_device_can_stamp_but_an_unsigned_caller_cannot() {
         200
     );
 }
+
+/// The wire must stay uninformative while the person at the host learns why a
+/// device stopped landing. Before this, a companion that had drifted, moved, or
+/// been revoked produced the same silent 401 with nothing recorded anywhere.
+#[test]
+fn a_refusal_says_nothing_on_the_wire_and_names_itself_on_the_host() {
+    let harness = fixture();
+    let base = harness.server.base_url();
+    let secret = pair(&base, &harness.host, DEVICE_ID);
+    let host_id = harness.host.host_id();
+    let body = snapshot_json("page-one");
+
+    let refused = upload(
+        &base,
+        &secret,
+        DEVICE_ID,
+        &host_id,
+        unix_millis() - 600_000,
+        "n1",
+        &body,
+    );
+
+    assert_eq!(refused.status, 401);
+    let refusal = harness
+        .host
+        .last_refusal()
+        .expect("the host should have recorded why it refused");
+    assert!(
+        refusal.reason.contains("clock"),
+        "the recorded reason should name the failing check, got: {}",
+        refusal.reason
+    );
+    assert!(
+        !refused.body.contains("clock"),
+        "the wire answer must not say which check failed"
+    );
+    assert!(
+        !refusal.reason.contains(&secret),
+        "a reason must never carry key material"
+    );
+
+    let accepted = upload(&base, &secret, DEVICE_ID, &host_id, unix_millis(), "n2", &body);
+
+    assert_eq!(accepted.status, 200);
+    assert_eq!(
+        harness.host.last_refusal(),
+        None,
+        "a device that gets through should clear the complaint"
+    );
+}

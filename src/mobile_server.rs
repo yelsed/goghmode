@@ -643,22 +643,64 @@ fn host_proof(device: &AuthenticatedDevice, status: u16) -> [(String, String); 1
     )]
 }
 
+/// Callers still see one undifferentiated failure, so nothing on the wire says
+/// which check rejected the request. The reason is kept on the host instead,
+/// where it answers "why has my device stopped connecting" without telling an
+/// unknown caller anything.
+fn authenticate(context: &ServerContext, request: &HttpRequest) -> Option<AuthenticatedDevice> {
+    match authenticated_device(context, request) {
+        Ok(device) => {
+            context.host.clear_refusal();
+            Some(device)
+        }
+        Err(reason) => {
+            context.host.record_refusal(reason);
+            None
+        }
+    }
+}
+
 /// The order is the security property. A device must be known, its clock close
 /// enough, and its signature right, all before anything mutates state or the
 /// body is interpreted. Recording the timestamp comes last because it is a
 /// write, and an unauthenticated caller must never cause one.
-fn authenticate(context: &ServerContext, request: &HttpRequest) -> Option<AuthenticatedDevice> {
-    let device_id = request.header(HEADER_DEVICE)?;
+///
+/// Every `Err` names the check that failed. The secret and the offered
+/// signature stay out of it: the reason is shown on screen, and a host that
+/// prints key material to diagnose a link is worse than one that cannot be
+/// diagnosed.
+fn authenticated_device(
+    context: &ServerContext,
+    request: &HttpRequest,
+) -> Result<AuthenticatedDevice, String> {
+    let device_id = request
+        .header(HEADER_DEVICE)
+        .ok_or("a request arrived with no device header")?;
     if !device_id_is_safe(device_id) {
-        return None;
+        return Err("a request arrived with an unusable device id".to_owned());
     }
-    let timestamp: u128 = request.header(HEADER_TIMESTAMP)?.parse().ok()?;
-    let nonce = request.header(HEADER_NONCE)?;
-    let candidate = request.header(HEADER_MAC)?;
-    let secret = context.host.device_secret(device_id)?;
+    let timestamp: u128 = request
+        .header(HEADER_TIMESTAMP)
+        .ok_or_else(|| format!("{device_id} sent no timestamp"))?
+        .parse()
+        .map_err(|_| format!("{device_id} sent an unreadable timestamp"))?;
+    let nonce = request
+        .header(HEADER_NONCE)
+        .ok_or_else(|| format!("{device_id} sent no nonce"))?;
+    let candidate = request
+        .header(HEADER_MAC)
+        .ok_or_else(|| format!("{device_id} sent no signature"))?;
+    let secret = context.host.device_secret(device_id).ok_or_else(|| {
+        format!("{device_id} is not a paired device — pair it again on this host")
+    })?;
 
-    if unix_millis().abs_diff(timestamp) > TIMESTAMP_TOLERANCE_MILLIS {
-        return None;
+    let now = unix_millis();
+    if now.abs_diff(timestamp) > TIMESTAMP_TOLERANCE_MILLIS {
+        return Err(format!(
+            "{device_id} has a clock {} seconds away from this host, past the {} allowed — set its date automatically",
+            now.abs_diff(timestamp) / 1000,
+            TIMESTAMP_TOLERANCE_MILLIS / 1000,
+        ));
     }
     if !upload_mac_matches(
         &secret,
@@ -669,15 +711,19 @@ fn authenticate(context: &ServerContext, request: &HttpRequest) -> Option<Authen
         &sha256_hex(&request.body),
         candidate,
     ) {
-        return None;
+        return Err(format!(
+            "{device_id} signed its request with a key this host does not share — pair it again"
+        ));
     }
     // Strictly increasing per device, persisted, so a captured request cannot be
     // replayed — not even into a freshly restarted host.
     if !context.host.accept_timestamp(device_id, timestamp) {
-        return None;
+        return Err(format!(
+            "{device_id} reused a timestamp this host has already accepted"
+        ));
     }
 
-    Some(AuthenticatedDevice {
+    Ok(AuthenticatedDevice {
         secret,
         nonce: nonce.to_owned(),
     })

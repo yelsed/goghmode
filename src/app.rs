@@ -513,7 +513,7 @@ impl GoghModeApp {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(&device.device_name).strong());
                 ui.label(
-                    RichText::new(&device.platform)
+                    RichText::new(format!("{} · {}", device.platform, last_seen(&device)))
                         .size(12.0)
                         .color(Color32::from_rgb(150, 162, 178)),
                 );
@@ -524,6 +524,21 @@ impl GoghModeApp {
                     };
                 }
             });
+        }
+
+        // A link that has quietly stopped working looks exactly like one that
+        // was never used. This is the only place the host says which it is.
+        if let Some(refusal) = self.host.last_refusal() {
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(format!(
+                    "Turned away {}: {}",
+                    relative_time(refusal.at),
+                    refusal.reason
+                ))
+                .size(12.0)
+                .color(Color32::from_rgb(226, 183, 80)),
+            );
         }
     }
 
@@ -785,6 +800,15 @@ fn draw_sheet_card(
     });
 
     action
+}
+
+/// `relative_time` reads a zero stamp as "just now", which is right for a sheet
+/// being drawn and wrong for a device that has never been heard from.
+fn last_seen(device: &crate::host::Device) -> String {
+    if device.last_seen_at == 0 {
+        return "never seen".to_owned();
+    }
+    format!("last seen {}", relative_time(device.last_seen_at))
 }
 
 fn relative_time(updated_at_ms: u128) -> String {
