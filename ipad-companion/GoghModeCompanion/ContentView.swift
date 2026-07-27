@@ -218,7 +218,7 @@ struct CanvasView: View {
     private func clearSheet() {
         drawing = PKDrawing()
         reloadSignal += 1
-        store.update(pageID, with: drawing)
+        store.clear(pageID)
         uploader.uploadNow(
             snapshot: DrawingSnapshot.empty(canvasSize: canvasSize, page: page?.pageRef),
             to: destination

@@ -14,6 +14,7 @@
 		A10000000000000000000005 /* GoghModeClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* GoghModeClient.swift */; };
 		A10000000000000000000006 /* UploadController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* UploadController.swift */; };
 		A10000000000000000000007 /* DrawingSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* DrawingSnapshotTests.swift */; };
+		A10000000000000000000020 /* PageStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000020 /* PageStoreTests.swift */; };
 		A1000000000000000000000A /* PageStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A /* PageStore.swift */; };
 		A1000000000000000000000D /* GoghModeCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000D /* GoghModeCrypto.swift */; };
 		A1000000000000000000000E /* HostStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000E /* HostStore.swift */; };
@@ -42,6 +43,7 @@
 		A20000000000000000000005 /* GoghModeClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoghModeClient.swift; sourceTree = "<group>"; };
 		A20000000000000000000006 /* UploadController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadController.swift; sourceTree = "<group>"; };
 		A20000000000000000000007 /* DrawingSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawingSnapshotTests.swift; sourceTree = "<group>"; };
+		A20000000000000000000020 /* PageStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageStoreTests.swift; sourceTree = "<group>"; };
 		A20000000000000000000008 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A2000000000000000000000A /* PageStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageStore.swift; sourceTree = "<group>"; };
 		A2000000000000000000000D /* GoghModeCrypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoghModeCrypto.swift; sourceTree = "<group>"; };
@@ -96,6 +98,7 @@
 			isa = PBXGroup;
 			children = (
 				A20000000000000000000007 /* DrawingSnapshotTests.swift */,
+				A20000000000000000000020 /* PageStoreTests.swift */,
 			);
 			path = GoghModeCompanionTests;
 			sourceTree = "<group>";
@@ -207,7 +210,10 @@
 		AA0000000000000000000002 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
-			files = (A10000000000000000000007 /* DrawingSnapshotTests.swift in Sources */);
+			files = (
+				A10000000000000000000007 /* DrawingSnapshotTests.swift in Sources */,
+				A10000000000000000000020 /* PageStoreTests.swift in Sources */,
+			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */

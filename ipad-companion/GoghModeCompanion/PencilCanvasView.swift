@@ -17,7 +17,7 @@ struct PencilCanvasView: UIViewRepresentable {
         let canvasView = PKCanvasView()
         canvasView.delegate = context.coordinator
         canvasView.backgroundColor = .white
-        canvasView.drawing = drawing
+        context.coordinator.load(drawing, into: canvasView)
         // `.default` respects the system pencil-only preference while the tool
         // picker is visible, so palm and finger taps stop leaving stray dots.
         // The picker exposes a toggle for people drawing without a Pencil.
@@ -49,7 +49,7 @@ struct PencilCanvasView: UIViewRepresentable {
 
         if context.coordinator.lastReloadSignal != reloadSignal {
             context.coordinator.lastReloadSignal = reloadSignal
-            canvasView.drawing = drawing
+            context.coordinator.load(drawing, into: canvasView)
             return
         }
     }
@@ -65,11 +65,30 @@ struct PencilCanvasView: UIViewRepresentable {
             return picker
         }()
 
+        /// PencilKit reports a drawing the app assigns through the same delegate
+        /// call it uses for one the pencil made. Taking that echo for an edit is
+        /// what blanked a sheet the moment it was opened: the canvas is built
+        /// empty, and the echo wrote that emptiness back over the page and sent
+        /// it to the host.
+        private var isLoading = false
+
         init(parent: PencilCanvasView) {
             self.parent = parent
         }
 
+        /// Puts a drawing on the canvas without it counting as an edit.
+        func load(_ newDrawing: PKDrawing, into canvasView: PKCanvasView) {
+            isLoading = true
+            canvasView.drawing = newDrawing
+            // The callback can arrive after the assignment returns, so the flag
+            // is lowered a runloop later rather than on the next line.
+            DispatchQueue.main.async { [weak self] in
+                self?.isLoading = false
+            }
+        }
+
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
+            guard !isLoading else { return }
             parent.drawing = canvasView.drawing
             parent.onDrawingChanged(canvasView.drawing, canvasView.bounds.size)
         }
