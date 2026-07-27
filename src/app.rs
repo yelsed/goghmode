@@ -44,6 +44,14 @@ struct Sheet {
     stamp: Color32,
 }
 
+/// DESIGN.md's spacing scale. The window used none of it: content sat flush
+/// against the left edge at x=0, which is most of why the panels read as
+/// unfinished rather than plain.
+const HAIR: f32 = 1.0;
+const BLOCK: f32 = 8.0;
+const GUTTER: f32 = 20.0;
+const MARGIN: f32 = 28.0;
+
 const SET: Sheet = Sheet {
     ground: Color32::from_rgb(237, 234, 228),
     paper: Color32::from_rgb(255, 255, 255),
@@ -53,6 +61,30 @@ const SET: Sheet = Sheet {
     ink_label: Color32::from_rgb(107, 102, 94),
     stamp: Color32::from_rgb(180, 51, 31),
 };
+
+/// A section on paper with a ruled label above it, per DESIGN.md's
+/// `title-block` and `block-label`. Loose rows lying directly on the ground is
+/// what made the devices panel read as a debug dump.
+fn paper_block<R>(
+    ui: &mut egui::Ui,
+    label: &str,
+    contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    ui.label(
+        RichText::new(label.to_uppercase())
+            .size(10.0)
+            .strong()
+            .color(sheet().ink_label),
+    );
+    ui.add_space(HAIR * 4.0);
+    egui::Frame::new()
+        .fill(sheet().paper)
+        .stroke(EguiStroke::new(HAIR, sheet().edge))
+        .corner_radius(egui::CornerRadius::same(2))
+        .inner_margin(egui::Margin::symmetric(GUTTER as i8, BLOCK as i8 + 4))
+        .show(ui, |ui| contents(ui))
+        .inner
+}
 
 fn sheet() -> &'static Sheet {
     &SET
@@ -217,10 +249,21 @@ impl eframe::App for GoghModeApp {
 
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        ui.spacing_mut().item_spacing = Vec2::new(10.0, 10.0);
+        ui.spacing_mut().item_spacing = Vec2::new(BLOCK, BLOCK);
+        ui.spacing_mut().button_padding = Vec2::new(BLOCK + 2.0, BLOCK - 2.0);
+        // Everything sat flush against the window edge at x=0. DESIGN.md gives a
+        // 28px margin and the window was using none of it.
+        egui::Frame::new()
+            .inner_margin(egui::Margin::same(MARGIN as i8))
+            .show(ui, |ui| self.draw_window(ui));
+    }
+}
+
+impl GoghModeApp {
+    fn draw_window(&mut self, ui: &mut egui::Ui) {
 
         self.draw_header(ui);
-        ui.add_space(10.0);
+        ui.add_space(GUTTER);
 
         // The body scrolls inside what is left after the footer is reserved.
         // Without this, a long Devices panel — a QR code, a pairing payload, a
@@ -243,14 +286,12 @@ impl eframe::App for GoghModeApp {
                 View::Devices => self.draw_devices(ui),
             });
 
-        ui.add_space(8.0);
+        ui.add_space(BLOCK);
         self.draw_footer(ui);
-        ui.add_space(6.0);
+        ui.add_space(BLOCK);
         StatusBar::show(ui, &self.status);
     }
-}
 
-impl GoghModeApp {
     /// A title block on paper, the way DESIGN.md draws one, rather than loose
     /// text on the ground. Connection and Devices sit together at the right:
     /// they are one job — getting a device talking to this host — and putting
@@ -371,10 +412,10 @@ impl GoghModeApp {
             ui.ctx().request_repaint_after(Duration::from_millis(250));
         }
 
-        self.draw_host_identity(ui);
-        ui.add_space(10.0);
+        paper_block(ui, "This host", |ui| self.draw_host_identity(ui));
+        ui.add_space(GUTTER);
 
-        match &pairing {
+        paper_block(ui, "Pairing", |ui| match &pairing {
             PairingState::Pending { request, .. } => {
                 let request = request.clone();
                 self.draw_approval_request(ui, &request);
@@ -384,18 +425,17 @@ impl GoghModeApp {
                 self.draw_armed_pairing(ui, remaining);
             }
             PairingState::Idle => self.draw_pairing_start(ui),
-        }
+        });
 
-        ui.add_space(14.0);
-        self.draw_device_list(ui);
-        ui.add_space(14.0);
-        self.draw_legacy_toggle(ui);
+        ui.add_space(GUTTER);
+        paper_block(ui, "Paired devices", |ui| self.draw_device_list(ui));
+        ui.add_space(GUTTER);
+        paper_block(ui, "The old mobile URL", |ui| self.draw_legacy_toggle(ui));
     }
 
     fn draw_host_identity(&mut self, ui: &mut egui::Ui) {
         let identity = self.host.identity();
         ui.horizontal(|ui| {
-            ui.label(RichText::new("This host").strong());
             ui.add(egui::TextEdit::singleline(&mut self.host_name_draft).desired_width(240.0));
             if ui.button("Rename").clicked() {
                 let goghmode_dir = self.goghmode_dir.clone();
@@ -508,7 +548,6 @@ impl GoghModeApp {
 
     fn draw_device_list(&mut self, ui: &mut egui::Ui) {
         let devices = self.host.devices();
-        ui.label(RichText::new("Paired devices").strong());
         if devices.is_empty() {
             ui.label(
                 RichText::new("None yet. Uploads still arrive on the old mobile URL.")
