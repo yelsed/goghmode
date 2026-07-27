@@ -242,18 +242,43 @@ impl eframe::App for GoghModeApp {
 }
 
 impl GoghModeApp {
+    /// A title block on paper, the way DESIGN.md draws one, rather than loose
+    /// text on the ground. Connection and Devices sit together at the right:
+    /// they are one job — getting a device talking to this host — and putting
+    /// Devices at the far bottom of the window made it unfindable.
     fn draw_header(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("GoghMode").size(22.0).strong().color(sheet(ui).ink));
-            ui.label(
-                RichText::new("the drawing set your agent reads")
-                    .size(13.0)
-                    .color(sheet(ui).ink_label),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                self.draw_connection_chip(ui);
+        let sheet = sheet(ui);
+        egui::Frame::new()
+            .fill(sheet.paper)
+            .stroke(EguiStroke::new(1.0, sheet.edge))
+            .corner_radius(egui::CornerRadius::same(2))
+            .inner_margin(egui::Margin::symmetric(16, 12))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("GoghMode").size(20.0).strong().color(sheet.ink));
+                    ui.label(
+                        RichText::new("the drawing set your agent reads")
+                            .size(12.0)
+                            .color(sheet.ink_label),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let device_count = self.host.devices().len();
+                        let (label, target) = match self.view {
+                            View::Register => {
+                                (format!("Devices ({device_count})"), View::Devices)
+                            }
+                            View::Devices => ("Back to register".to_owned(), View::Register),
+                        };
+                        if ui.button(label).clicked() {
+                            self.view = target;
+                            if target == View::Register {
+                                self.refresh_pages();
+                            }
+                        }
+                        self.draw_connection_chip(ui);
+                    });
+                });
             });
-        });
     }
 
     /// One chip in place of a whole row of furniture: a copy button, the word
@@ -263,16 +288,24 @@ impl GoghModeApp {
     /// egui has no popover, and a collapsing section would shove the register
     /// down every time it opened, so the detail lives in a menu.
     fn draw_connection_chip(&mut self, ui: &mut egui::Ui) {
+        // Named, not merely dotted. "\u{25cf} Desley's MacBook" reads as a status
+        // line you cannot press; "Connection" reads as somewhere to go, which is
+        // what someone hunting for the mobile URL is actually looking for.
         let (dot, label) = match &self.bridge {
-            Bridge::Serving(_) => ("\u{25cf}", self.host.identity().display_name),
-            Bridge::Unavailable(_) => ("\u{25cb}", "Not serving".to_owned()),
+            Bridge::Serving(_) => (
+                "\u{25cf}",
+                format!("Connection \u{b7} {}", self.host.identity().display_name),
+            ),
+            Bridge::Unavailable(_) => ("\u{25cb}", "Connection \u{b7} not serving".to_owned()),
         };
         let tint = match &self.bridge {
             Bridge::Serving(_) => sheet(ui).ink,
             Bridge::Unavailable(_) => sheet(ui).stamp,
         };
 
-        ui.menu_button(RichText::new(format!("{dot}  {label}")).color(tint), |ui| {
+        ui.menu_button(
+            RichText::new(format!("{dot}  {label}  \u{25be}")).color(tint),
+            |ui| {
             match &self.bridge {
                 Bridge::Serving(server) => {
                     let url = server.url().to_owned();
@@ -795,19 +828,49 @@ pub fn install_theme(ctx: &egui::Context) {
 
 /// egui's own chrome — panels, buttons, menus — dressed in the same palette the
 /// sheets use, so nothing on screen belongs to a different set.
+///
+/// Two things here are load-bearing and were got wrong once already.
+///
+/// `noninteractive.fg_stroke` is the default colour of **every plain label**,
+/// not a colour for secondary text. Setting it to the label grey is what made
+/// the iPad settings screen unreadable before it was rebuilt at full ink weight
+/// (DESIGN.md), and doing it here washed out the whole window. Body text is
+/// ink; anything genuinely secondary asks for `ink_label` by name.
+///
+/// And a button needs an edge. Paper fill on a paper-coloured ground with no
+/// stroke is not a quiet control, it is an invisible one — which is how the
+/// connection chip managed to hide in plain sight.
 fn chrome(sheet: &Sheet, mut visuals: egui::Visuals) -> egui::Visuals {
     visuals.window_fill = sheet.ground;
     visuals.panel_fill = sheet.ground;
     visuals.extreme_bg_color = sheet.paper;
-    visuals.widgets.noninteractive.fg_stroke.color = sheet.ink_label;
+
+    visuals.widgets.noninteractive.fg_stroke.color = sheet.ink;
+    visuals.widgets.noninteractive.bg_stroke = EguiStroke::new(1.0, sheet.edge);
+
+    for widget in [
+        &mut visuals.widgets.inactive,
+        &mut visuals.widgets.hovered,
+        &mut visuals.widgets.active,
+    ] {
+        widget.fg_stroke.color = sheet.ink;
+        // DESIGN.md: control radius 8.
+        widget.corner_radius = egui::CornerRadius::same(8);
+    }
     visuals.widgets.inactive.bg_fill = sheet.paper;
-    visuals.widgets.inactive.fg_stroke.color = sheet.ink;
-    visuals.widgets.hovered.bg_fill = sheet.edge;
-    visuals.widgets.hovered.fg_stroke.color = sheet.ink;
-    visuals.widgets.active.bg_fill = sheet.rule;
-    visuals.widgets.active.fg_stroke.color = sheet.ink;
+    visuals.widgets.inactive.weak_bg_fill = sheet.paper;
+    visuals.widgets.inactive.bg_stroke = EguiStroke::new(1.0, sheet.edge);
+    visuals.widgets.hovered.bg_fill = sheet.paper;
+    visuals.widgets.hovered.weak_bg_fill = sheet.paper;
+    visuals.widgets.hovered.bg_stroke = EguiStroke::new(1.0, sheet.rule);
+    visuals.widgets.active.bg_fill = sheet.edge;
+    visuals.widgets.active.weak_bg_fill = sheet.edge;
+    visuals.widgets.active.bg_stroke = EguiStroke::new(1.0, sheet.rule);
+
     visuals.selection.bg_fill = sheet.stamp;
     visuals.selection.stroke.color = sheet.paper;
+    visuals.window_stroke = EguiStroke::new(1.0, sheet.edge);
+    visuals.popup_shadow = egui::epaint::Shadow::NONE;
     visuals
 }
 
