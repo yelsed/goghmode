@@ -16,4 +16,6 @@ this way?", write the ADR.
 ## Index
 | # | Decision | Status |
 |---|---|---|
-| [0001](0001-example.md) | {{Example decision}} | Accepted |
+| [0001](0001-latest-files-contract.md) | The agent interface is three files called `latest.*` | Accepted |
+| [0002](0002-token-in-url-local-server.md) | Phone access is a hand-written local server behind a secret URL | Accepted |
+| [0003](0003-native-ipad-companion.md) | A native iPad app in addition to the web page | Accepted |

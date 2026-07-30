@@ -29,8 +29,22 @@ back via their **Used on** header. Small one-off bits stay inline on the page.
 
 ## Index
 
+Empty on purpose. GoghMode has three surfaces, each small enough that its
+behavior is described in full by [ARCHITECTURE.md](../ARCHITECTURE.md) and read
+directly from the code:
+
+| Surface | Where it lives |
+|---|---|
+| Mac window — toolbar, canvas, status bar | `src/app.rs` |
+| Phone / tablet web page | `mobile/index.html` |
+| iPad companion — setup screen, drawing screen | `ipad-companion/GoghModeCompanion/ContentView.swift` |
+
+Write a spec here when a surface stops being obvious — the first candidate is the
+multi-page notes overview, which is a genuine design problem with states worth
+agreeing on before building (see [PLANNING.md](../PLANNING.md) Phase 2).
+
 ### Pages
-- [ ] [{{Page}}](pages/{{page}}.md) — one-line description
+_none yet_
 
 ### Components
-- [ ] [{{Component}}](components/{{component}}.md) — States it supports
+_none yet_
