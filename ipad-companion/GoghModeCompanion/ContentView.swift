@@ -118,9 +118,12 @@ struct ContentView: View {
             }
             .buttonStyle(.bordered)
         }
+        .tint(.white)
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .background(.regularMaterial)
+        // The canvas is white paper, so the toolbar has to be an obviously
+        // different surface or people try to draw on it and think the pen died.
+        .background(Color.goghChrome.ignoresSafeArea(edges: .top))
     }
 
     private var statusBadge: some View {
@@ -137,12 +140,13 @@ struct ContentView: View {
                     Text(message)
                         .font(.caption)
                         .lineLimit(1)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.white.opacity(0.7))
                 }
             }
+            .foregroundStyle(.white)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(.thinMaterial, in: Capsule())
+            .background(Color.white.opacity(0.12), in: Capsule())
         }
         .buttonStyle(.plain)
         .disabled(!uploader.canRetry)
@@ -158,6 +162,11 @@ struct ContentView: View {
             .red
         }
     }
+}
+
+extension Color {
+    /// Same dark chrome the Mac app uses for its toolbar.
+    static let goghChrome = Color(red: 18 / 255, green: 24 / 255, blue: 34 / 255)
 }
 
 #Preview {
