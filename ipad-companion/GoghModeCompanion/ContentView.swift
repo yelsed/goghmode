@@ -130,6 +130,11 @@ struct CanvasView: View {
         .background(Sheet.paper)
         .navigationTitle(page?.title ?? "Sheet")
         .navigationBarTitleDisplayMode(.inline)
+        // The sheet is white to the edge of the screen, so a translucent bar over
+        // it reads as more paper: people draw on it, get nothing, and conclude the
+        // pen is broken. On ground, the bar is the desk the sheet lies on.
+        .toolbarBackground(Sheet.ground, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 StatusBadge(status: uploader.status, canRetry: uploader.canRetry) {
