@@ -8,7 +8,9 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::crypto::sha256_hex;
-use crate::drawing::DrawingSnapshot;
+use crate::drawing::{
+    DrawingSnapshot, MAX_RULING_SPACING, MIN_RULING_SPACING, RULED_SCHEMA_VERSION,
+};
 use crate::host::{unix_millis, Host, PairOutcome, PLATFORM};
 use crate::pages::{page_id_is_safe, write_page};
 use crate::protocol::{
@@ -24,13 +26,13 @@ const MAX_SAVE_BODY_BYTES: usize = 4 * 1024 * 1024;
 
 /// Version 1 predates pages and keeps working. Bumping the accepted version
 /// rather than widening it would brick every installed companion build.
-const SUPPORTED_SCHEMA_VERSIONS: [u8; 2] = [1, 2];
+const SUPPORTED_SCHEMA_VERSIONS: [u8; 3] = [1, 2, 3];
 
 /// Lets a companion ask what this host understands instead of inferring it
 /// from a rejection. An older host has no such route and answers 404, which is
 /// a usable answer.
 const CAPABILITIES: &[u8] =
-    br#"{"schemaVersions":[1,2],"features":["pages","pin","promote","pairing-v2"]}"#;
+    br#"{"schemaVersions":[1,2,3],"features":["pages","pin","promote","pairing-v2","ruling"]}"#;
 
 pub const DEFAULT_PORT: u16 = 8787;
 
@@ -923,7 +925,7 @@ fn handle_promote_request(stream: &mut TcpStream, drawings_dir: &Path, body: &[u
 fn validate_snapshot(snapshot: &DrawingSnapshot) -> Result<(), String> {
     if !SUPPORTED_SCHEMA_VERSIONS.contains(&snapshot.schema_version) {
         return Err(format!(
-            "unsupported schemaVersion {} (this host understands 1 and 2)",
+            "unsupported schemaVersion {} (this host understands 1, 2 and 3)",
             snapshot.schema_version
         ));
     }
@@ -959,6 +961,25 @@ fn validate_snapshot(snapshot: &DrawingSnapshot) -> Result<(), String> {
     }
     if snapshot.canvas.background.len() > 64 {
         return Err("canvas background colour is too long".to_owned());
+    }
+    if let Some(ruling) = snapshot.canvas.ruling {
+        // Ruling is what version 3 exists to carry. Accepting it from a client
+        // claiming an older version would quietly widen what those versions mean,
+        // and the point of a version is that it says what the payload may hold.
+        if snapshot.schema_version < RULED_SCHEMA_VERSION {
+            return Err(format!(
+                "canvas ruling needs schemaVersion {RULED_SCHEMA_VERSION}, not {}",
+                snapshot.schema_version
+            ));
+        }
+        if !ruling.spacing.is_finite()
+            || !(MIN_RULING_SPACING..=MAX_RULING_SPACING).contains(&ruling.spacing)
+        {
+            return Err(format!(
+                "ruling spacing {} is outside the supported {}-{} range",
+                ruling.spacing, MIN_RULING_SPACING, MAX_RULING_SPACING
+            ));
+        }
     }
     if snapshot.strokes.len() > 4096 {
         return Err(format!(

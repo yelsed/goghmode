@@ -9,8 +9,8 @@
 // STORY: every page I drew is here and named, and I can see from across the desk
 // which one the agent is reading — because I stamped it.
 // FIRST VIEWPORT: large title "Pages", a mono status line naming the issued
-// sheet, then a grid of white sheets each carrying its title block. Exactly one
-// wears a rotated stamp.
+// sheet, then a ruled index of sheets. Exactly one wears the issued mark, and it
+// is the only saturated colour on screen.
 // FORM: drawing set / sheet register. Ranked #2 of seven; taken after the roll
 // was re-rolled off Contact Sheet. Seed unavailable — catalog unreachable.
 
@@ -66,6 +66,17 @@ enum Sheet {
     /// 5.3:1 on ground in both appearances.
     static let onGroundSecondary =
         dynamic(light: (0.361, 0.345, 0.318), dark: (0.678, 0.659, 0.627))
+
+    /// Ruling ink, which is `rule-hair` resolved light. Not a dynamic pair: the
+    /// sheet is white in both appearances, and this has to match the value the
+    /// exporter bakes into the PNG exactly, or the page on the iPad and the page
+    /// the agent reads are two different pages.
+    ///
+    /// Resolved from the token rather than retyped as its own triple, so there is
+    /// one place the colour lives. `tests/export_snapshot.rs` pins it to the
+    /// exporter's copy, which is the one link no module can make.
+    static let rulingInk = UIColor(Sheet.ruleHair)
+        .resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
 
     static let sheetRadius: CGFloat = 2
     static let controlRadius: CGFloat = 8
@@ -185,32 +196,50 @@ struct TitleBlock: View {
     }
 }
 
-/// The stamp that says which sheet is built from. Rotated off-axis with uneven
-/// ink, because a rubber stamp is pressed by hand — a straight, evenly filled
-/// red pill would be a button wearing the world's clothes.
-struct IssueStamp: View {
+/// The mark that says which sheet the agent reads.
+///
+/// It shares its box exactly with the unstamped `STAMP` button, so the `AGENT`
+/// column does not shift when a sheet is stamped or lifted. The earlier version
+/// was rotated off-axis to read as a rubber stamp, which fought the one thing the
+/// register depends on: numbers, dates and stamps reading straight down their
+/// columns. The satisfaction of stamping lives in the impact settle instead.
+struct IssuedMark: View {
     var text = "Issued"
-    var tint: Color = Sheet.stamp
-    var scale: CGFloat = 1
-
-    /// The stamp is a graphic whose proportions matter, so it cannot simply take
-    /// a text style — but it still has to grow with the reading size, or it
-    /// becomes the one thing on the sheet a larger-type user cannot read.
-    @ScaledMetric(relativeTo: .footnote) private var baseSize: CGFloat = 13
 
     var body: some View {
-        Text(text.uppercased())
-            .font(.system(size: baseSize * scale, weight: .heavy))
-            .tracking(1.3 * scale)
-            .foregroundStyle(tint)
-            .padding(.horizontal, 10 * scale)
-            .padding(.vertical, 6 * scale)
-            .overlay {
-                Rectangle()
-                    .strokeBorder(tint, lineWidth: 2 * scale)
-            }
-            .opacity(0.88)
-            .rotationEffect(.degrees(-3.5))
-            .accessibilityLabel(Text("\(text). This is the page your agent reads."))
+        StampFace(symbol: "seal.fill", text: text, tint: Sheet.stamp, border: Sheet.stamp)
+        .accessibilityLabel(Text("\(text). This is the page your agent reads."))
+    }
+}
+
+/// The shared box behind both stamp states. Identical geometry either way, so the
+/// only thing that changes when a sheet is stamped is the ink.
+struct StampFace: View {
+    let symbol: String
+    let text: String
+    /// Lettering and edge are separate on purpose: the quiet button is `ink-label`
+    /// lettering inside a lighter `rule` edge, and only the stamped state spends
+    /// one colour on both.
+    let tint: Color
+    let border: Color
+
+    @ScaledMetric(relativeTo: .caption) private var boxHeight: CGFloat = 30
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: symbol)
+            Text(text.uppercased()).tracking(0.8)
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(tint)
+        .lineLimit(1)
+        .padding(.horizontal, 9)
+        // Scaled, not fixed. A 30pt box around type that grows is a box that
+        // clips `ISSUED` at a larger reading size, and the one word answering
+        // "what does the agent read?" is the worst one to lose.
+        .frame(height: boxHeight)
+        .overlay {
+            Rectangle().strokeBorder(border, lineWidth: Sheet.hair)
+        }
     }
 }

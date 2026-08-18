@@ -9,6 +9,28 @@ struct NotebookPage: Codable, Equatable, Identifiable {
     var drawingData: Data
     /// `nil` means a loose sheet, not filed into a series.
     var seriesID: String?
+    /// `nil` is a plain sheet, which is what every sheet was before ruling and
+    /// what every new one still is. Defaulted on decode so a store written by an
+    /// older build reads without migration.
+    var ruling: SheetRuling?
+
+    init(
+        id: String,
+        title: String,
+        createdAt: Date,
+        updatedAt: Date,
+        drawingData: Data,
+        seriesID: String? = nil,
+        ruling: SheetRuling? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.drawingData = drawingData
+        self.seriesID = seriesID
+        self.ruling = ruling
+    }
 
     var drawing: PKDrawing {
         (try? PKDrawing(data: drawingData)) ?? PKDrawing()
@@ -23,21 +45,16 @@ struct NotebookPage: Codable, Equatable, Identifiable {
     }
 
     /// The sheet as the wire format sees it, for sending a page the canvas does not
-    /// currently have open.
-    ///
-    /// A page's canvas size is not stored, so it is derived the way the preview
-    /// derives its source rect: a full page, grown to cover anything drawn past it.
-    /// A fixed portrait canvas would clamp every stroke made in landscape onto the
-    /// right-hand edge, because the Mac rejects points outside the canvas.
+    /// currently have open. `fromPencilDrawing` grows the page to cover anything
+    /// drawn past it, so a sheet written in landscape before the page had a fixed
+    /// size is still sent whole.
     var snapshot: DrawingSnapshot {
-        let pencilDrawing = drawing
-        let bounds = pencilDrawing.bounds
-        let unusable = bounds.isNull || bounds.isInfinite || bounds.isEmpty
-        let canvas = CGSize(
-            width: unusable ? 1024 : max(1024, bounds.maxX),
-            height: unusable ? 1366 : max(1366, bounds.maxY)
+        DrawingSnapshot.fromPencilDrawing(
+            drawing,
+            canvasSize: SheetPage.size,
+            page: pageRef,
+            ruling: ruling
         )
-        return DrawingSnapshot.fromPencilDrawing(pencilDrawing, canvasSize: canvas, page: pageRef)
     }
 }
 
@@ -85,7 +102,16 @@ final class PageStore: ObservableObject {
     /// keeping a second opinion about it.
     @Published private(set) var pinnedPageID: String?
 
+    /// Whether the open sheet has anywhere to step back to, or forward into.
+    @Published private(set) var canStepBack = false
+    @Published private(set) var canStepForward = false
+
     private let storeURL: URL
+    private let revisionsURL: URL
+    /// Loaded per sheet on demand. A trail is only read when a sheet is opened, so
+    /// the register never pays for history it does not show.
+    private var trails: [String: RevisionTrail] = [:]
+    private var trailsToWrite: Set<String> = []
 
     var selectedPage: NotebookPage? {
         pages.first { $0.id == selectedPageID }
@@ -129,7 +155,11 @@ final class PageStore: ObservableObject {
     }
 
     init(storeURL: URL? = nil) {
-        self.storeURL = storeURL ?? PageStore.defaultStoreURL()
+        let resolved = storeURL ?? PageStore.defaultStoreURL()
+        self.storeURL = resolved
+        // Named after the store it belongs to rather than sharing one folder, so
+        // two stores can never read each other's history.
+        self.revisionsURL = resolved.deletingPathExtension().appendingPathExtension("revisions")
         load()
         if pages.isEmpty {
             appendPage()
@@ -156,6 +186,7 @@ final class PageStore: ObservableObject {
     func select(_ pageID: String) {
         guard pages.contains(where: { $0.id == pageID }) else { return }
         selectedPageID = pageID
+        publishStepAvailability(for: pageID)
     }
 
     func page(_ pageID: String) -> NotebookPage? {
@@ -197,6 +228,7 @@ final class PageStore: ObservableObject {
     func delete(_ pageID: String) {
         guard pages.contains(where: { $0.id == pageID }) else { return }
         pages.removeAll { $0.id == pageID }
+        discardTrail(for: pageID)
         discardEmptySeries()
         if pages.isEmpty {
             appendPage()
@@ -207,8 +239,75 @@ final class PageStore: ObservableObject {
         save()
     }
 
+    /// Puts a sheet back to a state it held before.
+    ///
+    /// The one write besides `clear` allowed to empty a sheet that has strokes.
+    /// `update` refuses that, because a canvas reporting its own loading as an edit
+    /// is what emptied several sheets, but a sheet stepped back past its first
+    /// stroke is genuinely empty and has to be allowed to say so.
+    func restore(_ pageID: String, to drawing: PKDrawing) {
+        guard let index = pages.firstIndex(where: { $0.id == pageID }) else { return }
+        pages[index].drawingData = drawing.dataRepresentation()
+        pages[index].updatedAt = Date()
+        save()
+        // Stepping back is deliberate and rare, so where it left the sheet is
+        // worth putting on disk at once rather than waiting for the sheet to close.
+        flushRevisions()
+    }
+
+    /// Records where a sheet is now, so it can be come back to after the sheet has
+    /// been closed and opened again, which is where the canvas's own undo stack
+    /// goes, since reopening builds a fresh canvas.
+    ///
+    /// Called once per finished stroke. PencilKit reports a drawing many times
+    /// while one is being made, so the caller uses the stroke count changing as the
+    /// signal rather than every report.
+    func recordRevision(_ pageID: String, _ drawing: PKDrawing) {
+        var trail = trail(for: pageID)
+        let state = drawing.dataRepresentation()
+        if trail.states.indices.contains(trail.cursor), trail.states[trail.cursor] == state {
+            return
+        }
+
+        // Stepping back and then drawing abandons what was ahead, the way undo
+        // behaves everywhere else.
+        if trail.cursor >= 0 && trail.cursor + 1 < trail.states.count {
+            trail.states.removeSubrange((trail.cursor + 1)...)
+        }
+        trail.states.append(state)
+        if trail.states.count > PageStore.revisionDepth {
+            trail.states.removeFirst(trail.states.count - PageStore.revisionDepth)
+        }
+        trail.cursor = trail.states.count - 1
+        commit(trail, for: pageID)
+    }
+
+    func stepBack(_ pageID: String) -> PKDrawing? {
+        var trail = trail(for: pageID)
+        guard trail.cursor > 0 else { return nil }
+        trail.cursor -= 1
+        commit(trail, for: pageID)
+        return PageStore.drawing(from: trail.states[trail.cursor])
+    }
+
+    func stepForward(_ pageID: String) -> PKDrawing? {
+        var trail = trail(for: pageID)
+        guard trail.cursor + 1 < trail.states.count else { return nil }
+        trail.cursor += 1
+        commit(trail, for: pageID)
+        return PageStore.drawing(from: trail.states[trail.cursor])
+    }
+
     func updateSelectedPage(with drawing: PKDrawing) {
         update(selectedPageID, with: drawing)
+    }
+
+    /// The ruling a sheet is written against. Per sheet rather than per app: a
+    /// lined note and a squared diagram are the ordinary case, not an edge one.
+    func setRuling(_ ruling: SheetRuling?, on pageID: String) {
+        guard let index = pages.firstIndex(where: { $0.id == pageID }) else { return }
+        pages[index].ruling = ruling
+        save()
     }
 
     func rename(_ pageID: String, to title: String) {
@@ -345,6 +444,93 @@ final class PageStore: ObservableObject {
                 seriesID: nil
             )
         }
+    }
+
+    /// A sheet's recent states, oldest first, with the cursor on the one the canvas
+    /// is showing.
+    private struct RevisionTrail: Codable {
+        var states: [Data] = []
+        var cursor: Int = -1
+    }
+
+    /// ponytail: twenty states per sheet, kept whole rather than as differences.
+    /// A long page's states are tens of kilobytes each, so if the sidecars ever get
+    /// heavy the upgrade is to store stroke differences, not to keep fewer.
+    private static let revisionDepth = 20
+
+    /// Loaded from disk once per sheet, then held. Seeded from the sheet's current
+    /// state so there is always somewhere to come back to.
+    private func trail(for pageID: String) -> RevisionTrail {
+        if let held = trails[pageID] {
+            return held
+        }
+
+        var trail = RevisionTrail()
+        if let data = try? Data(contentsOf: trailURL(for: pageID)),
+           let stored = try? JSONDecoder().decode(RevisionTrail.self, from: data) {
+            trail = stored
+        } else if let page = page(pageID) {
+            trail.states = [page.drawingData]
+            trail.cursor = 0
+        }
+
+        trails[pageID] = trail
+        return trail
+    }
+
+    /// Held in memory and written out later.
+    ///
+    /// Writing here would put the whole trail on disk after every stroke, and a
+    /// trail is twenty drawings: far more per stroke than the page itself costs.
+    /// The page is still saved immediately, which is the part nobody may lose;
+    /// history is a convenience, so it is written when the sheet is put down.
+    private func commit(_ trail: RevisionTrail, for pageID: String) {
+        trails[pageID] = trail
+        trailsToWrite.insert(pageID)
+        publishStepAvailability(for: pageID)
+    }
+
+    /// Called when a sheet is closed and when the app goes to the background,
+    /// which are the two moments its history could otherwise be lost.
+    func flushRevisions() {
+        guard !trailsToWrite.isEmpty else { return }
+        try? FileManager.default.createDirectory(
+            at: revisionsURL,
+            withIntermediateDirectories: true
+        )
+
+        for pageID in trailsToWrite {
+            guard let trail = trails[pageID],
+                  let data = try? JSONEncoder().encode(trail) else { continue }
+            try? data.write(to: trailURL(for: pageID), options: .atomic)
+        }
+        trailsToWrite.removeAll()
+    }
+
+    private func discardTrail(for pageID: String) {
+        trails[pageID] = nil
+        trailsToWrite.remove(pageID)
+        try? FileManager.default.removeItem(at: trailURL(for: pageID))
+    }
+
+    private func publishStepAvailability(for pageID: String) {
+        guard pageID == selectedPageID else { return }
+        let held = trail(for: pageID)
+        canStepBack = held.cursor > 0
+        canStepForward = held.cursor + 1 < held.states.count
+    }
+
+    /// The page id is minted by this app as a UUID string, so it is already safe as
+    /// a file name. Percent-encoded anyway, because a file name built from stored
+    /// data is a path either way.
+    private func trailURL(for pageID: String) -> URL {
+        let safe = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        let name = pageID.addingPercentEncoding(withAllowedCharacters: safe) ?? "unnamed"
+        return revisionsURL.appendingPathComponent("\(name).json")
+    }
+
+    private static func drawing(from data: Data) -> PKDrawing {
+        (try? PKDrawing(data: data)) ?? PKDrawing()
     }
 
     private func save() {

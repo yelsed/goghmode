@@ -19,11 +19,68 @@ struct PageRef: Codable, Equatable {
 
 let currentSchemaVersion = 2
 let pagelessSchemaVersion = 1
+/// The version that can carry ruling. Only sent by a sheet that has some, so a
+/// plain sheet never needs a host new enough to understand it.
+let ruledSchemaVersion = 3
+
+/// The sheet itself, in page units.
+///
+/// The drawing area used to be whatever the view bounds happened to be, so a sheet
+/// changed shape with the way the iPad was held and there was nothing to zoom into.
+/// A sheet is a sheet of paper: one size, portrait, the same on every device.
+enum SheetPage {
+    static let size = CGSize(width: 1024, height: 1366)
+}
 
 struct CanvasSize: Codable, Equatable {
     let width: Double
     let height: Double
     let background: String
+    /// Absent on a plain sheet, which is what an unruled sheet has always sent.
+    /// A `var` so the memberwise initialiser defaults it, and every call that
+    /// builds a plain canvas reads as it always did.
+    var ruling: SheetRuling?
+}
+
+/// What the sheet was written against. A writing aid the person chose per sheet,
+/// drawn under the ink here and again at export, so the page the agent reads is
+/// the page that was drawn on. See ADR-0007.
+struct SheetRuling: Codable, Equatable, Hashable {
+    var style: Style
+    var spacing: Double
+
+    enum Style: String, Codable, CaseIterable, Identifiable {
+        case lines
+        case grid
+        case dots
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .lines: "Lines"
+            case .grid: "Grid"
+            case .dots: "Dots"
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .lines: "line.3.horizontal"
+            case .grid: "grid"
+            case .dots: "circle.grid.3x3"
+            }
+        }
+    }
+
+    /// One rhythm shared by all three styles, in page units, matching the range
+    /// the host accepts.
+    static let defaultSpacing: Double = 32
+
+    init(style: Style, spacing: Double = SheetRuling.defaultSpacing) {
+        self.style = style
+        self.spacing = spacing
+    }
 }
 
 struct Stroke: Codable, Equatable, Identifiable {
@@ -48,7 +105,8 @@ extension DrawingSnapshot {
             canvas: CanvasSize(
                 width: Double(max(1.0, canvasSize.width)),
                 height: Double(max(1.0, canvasSize.height)),
-                background: "#ffffff"
+                background: "#ffffff",
+                ruling: nil
             ),
             strokes: []
         )
@@ -65,13 +123,36 @@ extension DrawingSnapshot {
         )
     }
 
+    /// The same drawing on a plain sheet, for a host that predates ruling. The
+    /// strokes are what matter; the rules are the aid they were made against.
+    func withoutRuling() -> DrawingSnapshot {
+        guard canvas.ruling != nil else { return self }
+        return DrawingSnapshot(
+            schemaVersion: min(schemaVersion, currentSchemaVersion),
+            page: page,
+            canvas: CanvasSize(
+                width: canvas.width,
+                height: canvas.height,
+                background: canvas.background,
+                ruling: nil
+            ),
+            strokes: strokes
+        )
+    }
+
     static func fromPencilDrawing(
         _ drawing: PKDrawing,
         canvasSize: CGSize,
-        page: PageRef? = nil
+        page: PageRef? = nil,
+        ruling: SheetRuling? = nil
     ) -> DrawingSnapshot {
-        let width = max(1.0, canvasSize.width)
-        let height = max(1.0, canvasSize.height)
+        // Grown to cover anything drawn past the page rather than clamped to it: a
+        // sheet written on before the page had a fixed size, on an iPad held in
+        // landscape, would otherwise have every stroke past the edge flattened onto
+        // it, and the host rejects points outside the canvas anyway.
+        let covering = canvasSize.covering(drawing.bounds)
+        let width = max(1.0, covering.width)
+        let height = max(1.0, covering.height)
         let strokes = drawing.strokes.enumerated().compactMap { strokeIndex, pencilStroke -> Stroke? in
             let points = pencilStroke.path.enumerated().map { pointIndex, strokePoint in
                 // Full Double precision costs ~250 bytes per point on the wire and
@@ -97,11 +178,27 @@ extension DrawingSnapshot {
         }
 
         return DrawingSnapshot(
-            schemaVersion: currentSchemaVersion,
+            // Only a ruled sheet asks for the newer version, so nothing changes for
+            // anyone drawing on plain paper against an older host.
+            schemaVersion: ruling == nil ? currentSchemaVersion : ruledSchemaVersion,
             page: page,
-            canvas: CanvasSize(width: Double(width), height: Double(height), background: "#ffffff"),
+            canvas: CanvasSize(
+                width: Double(width),
+                height: Double(height),
+                background: "#ffffff",
+                ruling: ruling
+            ),
             strokes: strokes
         )
+    }
+}
+
+extension CGSize {
+    /// This size, grown so the given rect fits inside it. An unusable rect (a
+    /// drawing with no strokes reports a null one) leaves the size alone.
+    func covering(_ rect: CGRect) -> CGSize {
+        guard !rect.isNull, !rect.isInfinite, !rect.isEmpty else { return self }
+        return CGSize(width: max(width, rect.maxX), height: max(height, rect.maxY))
     }
 }
 

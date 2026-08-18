@@ -30,7 +30,34 @@ pub struct CanvasSize {
     pub width: f32,
     pub height: f32,
     pub background: String,
+    /// Absent before schema version 3, and absent on a plain sheet at any
+    /// version. Optional rather than defaulted so an unruled sheet's exported
+    /// JSON stays exactly what it has always been.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ruling: Option<Ruling>,
 }
+
+/// What the sheet was written against. A writing aid the person chose, not a
+/// texture: it is drawn under the ink at export so the page the agent reads is
+/// the page that was drawn on.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Ruling {
+    pub style: RulingStyle,
+    pub spacing: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RulingStyle {
+    Lines,
+    Grid,
+    Dots,
+}
+
+/// The spacing a client may ask for. Below the floor a page is a grey wash and
+/// the strokes stop reading; above the ceiling nothing is being ruled.
+pub const MIN_RULING_SPACING: f32 = 8.0;
+pub const MAX_RULING_SPACING: f32 = 256.0;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PageRef {
@@ -50,7 +77,10 @@ pub struct DrawingSnapshot {
     pub strokes: Vec<Stroke>,
 }
 
-pub const CURRENT_SCHEMA_VERSION: u8 = 2;
+pub const CURRENT_SCHEMA_VERSION: u8 = 3;
+
+/// The version that may carry ruling. Named so the validator can say so.
+pub const RULED_SCHEMA_VERSION: u8 = 3;
 
 /// The page the desktop canvas owns. Without it the desktop app keeps
 /// overwriting whichever page the iPad sent last.
@@ -81,6 +111,7 @@ impl Drawing {
                 width: width.max(1.0),
                 height: height.max(1.0),
                 background: "#ffffff".to_owned(),
+                ruling: None,
             },
             strokes: Vec::new(),
             active: None,

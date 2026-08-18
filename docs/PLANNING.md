@@ -40,8 +40,12 @@ someone writing.
 - [x] iPad gets a page switcher over locally-held pages.
 - [x] Mac-side browsing, brought forward rather than deferred: the Mac owns the
       directory and reads it directly, so no read endpoint was needed.
-- [ ] Deletion and renaming. Deliberately outside the first slice; when it lands it
-      moves pages to `pages/.trash/<id>/` rather than unlinking, so undo is a rename.
+- [x] Deletion and renaming **on the iPad**: renaming through the title block,
+      deleting by swipe or long press, both asking first. The host keeps the copy it
+      already has, and the register says so rather than implying a reach it does not
+      have.
+- [ ] Deletion on the host. When it lands it moves pages to `pages/.trash/<id>/`
+      rather than unlinking, so undo is a rename.
 - [ ] Retention. Pages are kept forever and nothing expires them. ~40 KB per page,
       overwritten in place, so there is no storage pressure to manage — and deleting
       handwritten notes on a timer would re-create the fear this phase removes.
@@ -49,10 +53,12 @@ someone writing.
 ### Phase 2 — Pairing without copy-paste
 Independent of Phase 1; can be done at any time.
 
-- [ ] Show a QR code for the mobile URL on the Mac.
-- [ ] Handle the ephemeral-port fallback: at minimum warn when the server did not
-      get 8787, since a stale URL currently fails silently. See **Known failure
-      modes** in [ARCHITECTURE.md](ARCHITECTURE.md).
+- [x] Show a QR code on the host, and scan it with the iPad camera. The preview
+      follows the device through `AVCaptureDevice.RotationCoordinator`, so the
+      camera and the tablet agree about which way is up.
+- [x] Handle the ephemeral-port fallback. The fallback was removed rather than
+      warned about: binding 8787 is the lock, and a host that cannot have it says so
+      instead of moving somewhere no saved address points at.
 - [x] Decide whether the secret URL alone stays sufficient or the host should
       confirm a new device. **It is not sufficient once there is more than one
       host.** The host confirms each device and issues it a secret of its own —
@@ -110,8 +116,12 @@ the threat model, the protocol, and the ordered sub-phases.
 ### Later / unscheduled
 - [ ] Photo and snapshot import, so a phone photo of a paper page enters the same
       bridge.
-- [ ] Obsidian export into the LLM wiki vault — a storage and review layer, added
-      only once the capture loop is excellent.
+- [x] A sheet reaches the vault. `goghmode copy` puts the stamped sheet on the
+      clipboard and `goghmode install-raycast` gives it a hotkey, so the paste lands
+      wherever the cursor already is. Deliberately not automatic: see
+      [OPEN-QUESTIONS](specs/OPEN-QUESTIONS.md).
+- [ ] Writing a sheet into the vault as a note rather than only pasting it. Needs a
+      name, a folder, and an answer for the same sheet sent twice.
 - [ ] PNG upload path for clients that can only send raster images.
 - [ ] Rust CI. `cargo test` currently runs locally only.
 

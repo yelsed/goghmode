@@ -39,7 +39,7 @@ before matching.
 | GET / HEAD | `{prefix}manifest.webmanifest` | `application/manifest+json` |
 | GET / HEAD | `{prefix}service-worker.js` | `text/javascript` |
 | GET / HEAD | `{prefix}icon.svg` | `image/svg+xml` |
-| GET / HEAD | `{prefix}capabilities` | `{"schemaVersions":[1,2],"features":["pages"]}`, `application/json` |
+| GET / HEAD | `{prefix}capabilities` | `{"schemaVersions":[1,2,3],"features":["pages","pin","promote","pairing-v2","ruling"]}`, `application/json` |
 | GET / HEAD | `/{token}` (no trailing slash) | `308` redirect to `{prefix}` |
 | POST | `{prefix}save` | `200 {"ok":true}` · `400` with a reason · `500` on write failure · **`403` once a device has been paired**, unless the legacy toggle is back on |
 | POST | `{prefix}pin`, `{prefix}promote` | As above, and closed by the same gate. An anonymous `pin` would choose what the agent reads without ever sending a stroke. |
@@ -107,7 +107,8 @@ an iPad.
 | Limit | Value |
 | --- | --- |
 | Body size | 4 MiB, checked on headers and on the declared `Content-Length` |
-| `schemaVersion` | `1` or `2` |
+| `schemaVersion` | `1`, `2` or `3`. Only a sheet carrying ruling asks for `3`; a plain sheet still sends `2`. |
+| `canvas.ruling` | Optional. `{"style":"lines\|grid\|dots","spacing":8..=256}`. Rejected with a named reason outside that range. |
 | `page` | required at version 2, absent at version 1 |
 | `page.id` | `[A-Za-z0-9_-]`, 1–64 characters |
 | `page.title` | ≤ 200 characters |

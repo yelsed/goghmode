@@ -1,5 +1,6 @@
 mod app;
 mod app_install;
+mod clipboard;
 mod crypto;
 mod drawing;
 mod export;
@@ -8,19 +9,23 @@ mod mobile_server;
 mod pages;
 mod prompt;
 mod protocol;
+mod raycast;
 mod skill;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use mobile_server::StartOutcome;
 use prompt::PromptTarget;
 use skill::SkillTarget;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(name = "goghmode")]
 #[command(about = "Draw in a native Rust app and save files AI tools can inspect")]
 struct Cli {
-    #[arg(long)]
+    /// Where drawings are read and written. Defaults to ~/Pictures/GoghMode/drawings.
+    // Global so a copy reads the directory the app was told to write to,
+    // whichever side of the subcommand the flag is typed on.
+    #[arg(long, global = true)]
     drawings_dir: Option<PathBuf>,
 
     #[command(subcommand)]
@@ -38,6 +43,16 @@ enum Command {
         target: SkillTargetArg,
     },
     InstallApp,
+    /// Puts a saved sheet on the clipboard, ready to paste.
+    Copy {
+        /// A page id from the pages index. Without it, the sheet the agent reads.
+        #[arg(long)]
+        page: Option<String>,
+    },
+    InstallRaycast {
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -80,8 +95,47 @@ fn run() -> anyhow::Result<()> {
             println!("Installed GoghMode at {}", path.display());
             Ok(())
         }
+        Some(Command::Copy { page }) => {
+            let drawings_dir = cli.drawings_dir.unwrap_or_else(default_drawings_dir);
+            copy_sheet(&drawings_dir, page.as_deref())
+        }
+        Some(Command::InstallRaycast { dir }) => {
+            let directory = match dir {
+                Some(directory) => directory,
+                None => {
+                    let home_dir = home::home_dir()
+                        .ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
+                    raycast::default_script_dir(&home_dir)
+                }
+            };
+            let path = raycast::install_raycast_script(&directory)?;
+            println!("Installed the Raycast script at {}", path.display());
+            println!(
+                "One step is left in Raycast: open Extensions, Script Commands, add the folder {}, then give Copy latest GoghMode sheet a hotkey.",
+                directory.display()
+            );
+            Ok(())
+        }
         None => run_app(cli.drawings_dir.unwrap_or_else(default_drawings_dir)),
     }
+}
+
+/// Names the sheet and its age before anything is pasted, because a copy is
+/// silent otherwise: `latest.png` is rewritten whenever a sheet is stamped, so
+/// the newest file is not always the drawing the user has in mind.
+fn copy_sheet(drawings_dir: &Path, page_id: Option<&str>) -> anyhow::Result<()> {
+    let image_path = clipboard::sheet_image_path(drawings_dir, page_id)?;
+    let image = clipboard::read_sheet_image(&image_path)?;
+    clipboard::copy_image_to_clipboard(&image)?;
+
+    println!("Copied {}", image_path.display());
+    if let Some(updated_at) = clipboard::read_updated_at(&clipboard::sheet_json_path(&image_path)) {
+        println!(
+            "Saved {}.",
+            clipboard::describe_age(updated_at, host::unix_millis())
+        );
+    }
+    Ok(())
 }
 
 /// One location, whatever launched the app. This used to depend on whether the

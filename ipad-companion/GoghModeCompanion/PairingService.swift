@@ -155,6 +155,10 @@ final class ScannerViewController: UIViewController, AVCaptureMetadataOutputObje
     private let session = AVCaptureSession()
     private var preview: AVCaptureVideoPreviewLayer?
     private var hasScanned = false
+    /// Held for as long as the scanner is on screen. Released, it stops reporting,
+    /// and the preview freezes at whichever rotation it happened to have.
+    private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
+    private var rotationObservation: NSKeyValueObservation?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -179,6 +183,44 @@ final class ScannerViewController: UIViewController, AVCaptureMetadataOutputObje
         preview.frame = view.bounds
         view.layer.addSublayer(preview)
         self.preview = preview
+
+        followDeviceRotation(of: device, previewing: preview)
+    }
+
+    /// Without this the connection keeps its default portrait rotation while the
+    /// layer is stretched to whatever bounds the iPad currently has, so the camera
+    /// and the tablet disagree about which way is up and pairing feels wrong.
+    ///
+    /// The coordinator reports the angle that keeps the preview level with the
+    /// horizon, which is what a person holding a tablet expects, and it keeps
+    /// reporting as the device turns. That is less code than mapping interface
+    /// orientations by hand and it does not go stale on rotation.
+    private func followDeviceRotation(
+        of device: AVCaptureDevice,
+        previewing preview: AVCaptureVideoPreviewLayer
+    ) {
+        let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: preview)
+        apply(rotationAngle: coordinator.videoRotationAngleForHorizonLevelPreview)
+
+        rotationObservation = coordinator.observe(
+            \.videoRotationAngleForHorizonLevelPreview,
+            options: [.new]
+        ) { [weak self] _, change in
+            guard let angle = change.newValue else { return }
+            DispatchQueue.main.async {
+                self?.apply(rotationAngle: angle)
+            }
+        }
+        rotationCoordinator = coordinator
+    }
+
+    private func apply(rotationAngle: CGFloat) {
+        guard let connection = preview?.connection,
+            connection.isVideoRotationAngleSupported(rotationAngle)
+        else {
+            return
+        }
+        connection.videoRotationAngle = rotationAngle
     }
 
     override func viewDidLayoutSubviews() {

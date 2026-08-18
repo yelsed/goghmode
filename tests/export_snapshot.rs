@@ -275,3 +275,123 @@ fn stamping_a_sheet_keeps_the_time_it_was_drawn() {
         "a stamped sheet must keep its own time, or an old sketch reads as freshly drawn"
     );
 }
+
+/// The ruling is a writing aid the person chose, and the point of baking it in is
+/// that the page the agent reads is the page that was drawn on.
+fn ruled_snapshot(style: drawing::RulingStyle, spacing: f32) -> drawing::DrawingSnapshot {
+    drawing::DrawingSnapshot {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        page: None,
+        canvas: drawing::CanvasSize {
+            width: 100.0,
+            height: 100.0,
+            background: "#ffffff".to_owned(),
+            ruling: Some(drawing::Ruling {
+                style,
+                spacing,
+            }),
+        },
+        strokes: Vec::new(),
+    }
+}
+
+#[test]
+fn a_ruled_sheet_carries_its_rules_into_the_png_and_the_svg() {
+    let snapshot = ruled_snapshot(drawing::RulingStyle::Grid, 32.0);
+
+    let svg = export::snapshot_to_svg(&snapshot);
+    assert!(svg.contains("#C9C4BB"), "ruling ink missing from the svg");
+    assert!(svg.contains("<line"), "grid ruling should be drawn as lines");
+
+    let image = snapshot_to_rgba(&snapshot);
+    let ruled = image.get_pixel(10, 32);
+    let blank = image.get_pixel(10, 16);
+    assert_eq!(ruled.0, [201, 196, 187, 255], "no rule where one belongs");
+    assert_eq!(blank.0, [255, 255, 255, 255], "a rule where none belongs");
+}
+
+#[test]
+fn a_plain_sheet_exports_exactly_as_it_always_did() {
+    let mut snapshot = ruled_snapshot(drawing::RulingStyle::Grid, 32.0);
+    snapshot.canvas.ruling = None;
+
+    let svg = export::snapshot_to_svg(&snapshot);
+    assert!(!svg.contains("<line"), "an unruled sheet gained rules");
+
+    let image = snapshot_to_rgba(&snapshot);
+    assert_eq!(image.get_pixel(10, 32).0, [255, 255, 255, 255]);
+
+    let temp = tempfile::tempdir().unwrap();
+    write_artifacts(&snapshot, temp.path(), "latest", "drawings/", None).unwrap();
+    let json = fs::read_to_string(temp.path().join("latest.json")).unwrap();
+    assert!(
+        !json.contains("ruling"),
+        "an unruled sheet should not mention ruling at all"
+    );
+}
+
+#[test]
+fn ruled_lines_stay_inside_the_page() {
+    let snapshot = ruled_snapshot(drawing::RulingStyle::Lines, 100.0);
+
+    // The only stop would be at the page edge itself, which is not a rule.
+    let svg = export::snapshot_to_svg(&snapshot);
+    assert!(!svg.contains("<line"));
+
+    let image = snapshot_to_rgba(&snapshot);
+    assert_eq!(image.get_pixel(10, 99).0, [255, 255, 255, 255]);
+}
+
+#[test]
+fn dotted_ruling_marks_the_crossings_rather_than_drawing_lines() {
+    let snapshot = ruled_snapshot(drawing::RulingStyle::Dots, 25.0);
+
+    let svg = export::snapshot_to_svg(&snapshot);
+    assert!(svg.contains("<circle"), "dots should be drawn as circles");
+    assert!(!svg.contains("<line"));
+
+    let image = snapshot_to_rgba(&snapshot);
+    assert_eq!(image.get_pixel(25, 25).0, [201, 196, 187, 255]);
+    assert_eq!(image.get_pixel(12, 12).0, [255, 255, 255, 255]);
+}
+
+/// The one thing that cannot be shared across the language boundary, so it is
+/// guarded instead.
+///
+/// The iPad draws the ruling on screen and this crate draws it again into the
+/// PNG the agent reads. Those are two implementations of one appearance, and the
+/// whole promise of ruling is that the page the agent reads is the page that was
+/// written on. If the two inks drift, nothing else notices.
+///
+/// A source grep for the same reason `tests/app_mobile_url.rs` uses one: there is
+/// no way to link the two and no way to snapshot them together.
+#[test]
+fn the_ipad_rules_a_sheet_in_the_same_ink_the_exporter_bakes_in() {
+    let swift = std::fs::read_to_string(
+        "ipad-companion/GoghModeCompanion/DrawingSetStyle.swift",
+    )
+    .expect("the companion's tokens should be readable from the repository root");
+
+    // #C9C4BB, which is `rule-hair` in DESIGN.md. The companion resolves its
+    // ruling ink from that token rather than retyping the triple, so the token is
+    // what has to match.
+    assert!(
+        swift.contains("ruleHair = dynamic(light: (0.788, 0.769, 0.733)"),
+        "Sheet.ruleHair no longer matches the exporter's RULING_INK"
+    );
+    assert!(
+        swift.contains("rulingInk = UIColor(Sheet.ruleHair)"),
+        "Sheet.rulingInk should stay derived from the rule-hair token"
+    );
+
+    let expected: [u8; 3] = [
+        (0.788 * 255.0_f32).round() as u8,
+        (0.769 * 255.0_f32).round() as u8,
+        (0.733 * 255.0_f32).round() as u8,
+    ];
+    let snapshot = ruled_snapshot(drawing::RulingStyle::Lines, 32.0);
+    let image = snapshot_to_rgba(&snapshot);
+    let rule = image.get_pixel(10, 32).0;
+
+    assert_eq!([rule[0], rule[1], rule[2]], expected);
+}

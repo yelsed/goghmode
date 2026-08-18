@@ -54,6 +54,10 @@ final class UploadController: ObservableObject {
     /// False on a host that understands pages but not the stamp routes.
     @Published private(set) var pinningSupported = true
 
+    /// False once a host has refused a ruled sheet. Ruling is dropped from what is
+    /// sent rather than the save failing, because the strokes are what matter.
+    @Published private(set) var rulingSupported = true
+
     /// Whether the two flags above are an answer or a guess. Until a host has
     /// actually replied they are optimism, and a control drawn on optimism that
     /// disappears the moment it is pressed reads as the app breaking.
@@ -64,6 +68,7 @@ final class UploadController: ObservableObject {
     private var lastSnapshot: DrawingSnapshot?
     private var lastDestination: Destination?
     private var capabilitiesByAddress: [String: GoghModeCapabilities] = [:]
+    private var addressesThatRefusedRuling: Set<String> = []
 
     var pagesUnsupportedMessage: String? {
         pagesSupported
@@ -74,6 +79,12 @@ final class UploadController: ObservableObject {
     /// Names the app, not the machine. The first version said "this Mac is too
     /// old", which reads as a verdict on the hardware for something a reopen
     /// fixes.
+    var rulingUnsupportedMessage: String? {
+        rulingSupported
+            ? nil
+            : "GoghMode on the desktop is an older version that cannot draw ruling into the exported page, so your sheets are sent plain. Update it there and reopen it."
+    }
+
     static let hostAppOutOfDate =
         "GoghMode on the desktop is an older version that cannot stamp sheets yet. Update it there and reopen it."
 
@@ -160,9 +171,11 @@ final class UploadController: ObservableObject {
     /// and a cached "too old" answer would keep the stamp switched off forever.
     func forgetWhatTheHostAccepts() {
         capabilitiesByAddress.removeAll()
+        addressesThatRefusedRuling.removeAll()
         hostIsKnown = false
         pagesSupported = true
         pinningSupported = true
+        rulingSupported = true
     }
 
     /// Stamps a page as the one the agent reads, or clears the stamp with `nil`.
@@ -283,7 +296,10 @@ final class UploadController: ObservableObject {
     /// sending them at all.
     private func upload(_ snapshot: DrawingSnapshot, to destination: Destination) async throws {
         let capabilities = await resolvedCapabilities(for: destination)
-        let outgoing = capabilities.supportsPages ? snapshot : snapshot.withoutPage()
+        var outgoing = capabilities.supportsPages ? snapshot : snapshot.withoutPage()
+        if addressesThatRefusedRuling.contains(destination.host.address) {
+            outgoing = outgoing.withoutRuling()
+        }
 
         status = .saving
         do {
@@ -293,6 +309,14 @@ final class UploadController: ObservableObject {
             // which surfaces as `networkConnectionLost` even though the host is
             // reachable. One retry separates a dead socket from a dead server.
             try await Task.sleep(for: .milliseconds(300))
+            try await deliver(outgoing, to: destination)
+        } catch let error as UploadError where refusedTheSchema(error, carrying: outgoing) {
+            // Learned from the refusal rather than probed for: a host that
+            // predates ruling has no route that would have answered the question,
+            // and the drawing still has to arrive.
+            addressesThatRefusedRuling.insert(destination.host.address)
+            rulingSupported = false
+            outgoing = outgoing.withoutRuling()
             try await deliver(outgoing, to: destination)
         }
 
@@ -306,6 +330,22 @@ final class UploadController: ObservableObject {
             hostIsKnown = false
         }
         status = .saved(Date())
+    }
+
+    /// A refusal of a sheet that carried ruling is the one rejection worth
+    /// answering by sending less rather than by complaining.
+    ///
+    /// A paired host names what was wrong, so the reason can be read. The older
+    /// token route returns a bare 400 with nothing to read, and a 400 on a ruled
+    /// sheet is almost always the version it asked for. If it was not, the sheet
+    /// without its ruling fails the same way and gets reported as usual.
+    private func refusedTheSchema(_ error: UploadError, carrying snapshot: DrawingSnapshot) -> Bool {
+        guard snapshot.canvas.ruling != nil else { return false }
+        switch error {
+        case .rejected(let reason): return reason.contains("schemaVersion")
+        case .serverStatus(let status): return status == 400
+        default: return false
+        }
     }
 
     private func deliver(_ snapshot: DrawingSnapshot, to destination: Destination) async throws {

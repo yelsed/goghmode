@@ -34,18 +34,30 @@ Four of the five are answered; see **Resolved**. What remains:
       [ADR-0002](../decisions/0002-token-in-path-lan-pairing.md).
 - [ ] Should the desktop expose the server by default while the window is open, or
       require explicit opt-in each session?
-- [ ] Should the port fallback warn, or refuse and fail loudly? A QR code makes the
-      question mostly moot.
-
-### Schema and rendering divergences
-- [ ] Should `canvas.background` be honoured on export or removed from the schema?
-      Clients send it and nothing uses it.
 
 ### Scope questions carried from the vision document
 - [ ] Are notebook and whiteboard separate modes, or one canvas with templates?
-- [ ] Should Obsidian export be automatic or explicit, once it exists?
+      Ruling answers part of this: one canvas, with the sheet ruled per page.
+- [ ] Should a sheet also be written into the vault as a note, rather than only
+      landing on the clipboard? A note would need a name, a folder and a decision
+      about what happens when the same sheet is sent twice. The clipboard route
+      needs none of that, which is why it shipped first.
 
 ## Resolved
+
+- [x] **Should the port fallback warn, or refuse and fail loudly?** → Refuse. The
+      ephemeral fallback is gone: binding 8787 is the lock, and a host that cannot
+      have it says so rather than moving somewhere no saved address points at.
+
+- [x] **Should `canvas.background` be honoured on export or removed from the
+      schema?** → Kept, still ignored. Two shipped clients send it, and removing a
+      field three clients write is a break for the sake of tidiness. What a sheet
+      looks like is carried by `canvas.ruling` now.
+- [x] **Should Obsidian export be automatic or explicit?** → Explicit, and by
+      clipboard rather than by writing into the vault. `goghmode copy` puts the
+      stamped sheet's PNG on the clipboard and a Raycast hotkey fires it, so the
+      paste lands wherever the cursor already is. Automatic export would mean
+      deciding where in the vault a sheet belongs without being told.
 
 - [x] **Does `latest.*` keep meaning "the most recently touched page"?** → Yes, and
       it is a byte-identical mirror of the page written last. Forced rather than

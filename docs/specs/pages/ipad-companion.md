@@ -40,7 +40,7 @@ Setup until paired, then a `NavigationStack` whose root is the register.
 | `RegisterView.swift` | The overview: head rule, ruled index, rows, stamp control, series, previews. |
 | `PageStore.swift` | Local pages and series, persistence, sheet numbering, recorded pin. |
 | `DrawingSetStyle.swift` | The Drawing Set tokens and the shared drafting primitives. |
-| `PencilCanvasView.swift` | `UIViewRepresentable` around `PKCanvasView` + `PKToolPicker`. |
+| `PencilCanvasView.swift` | `UIViewRepresentable` around the sheet: ruling behind, `PKCanvasView` and `PKToolPicker` on top. |
 | `DrawingSnapshot.swift` | Codable wire schema and the `PKDrawing` → snapshot conversion. |
 | `GoghModeClient.swift` | Endpoint normalization, `URLSession` POST, capabilities, pin/promote, `UploadError`. |
 | `UploadController.swift` | `@MainActor ObservableObject` — debounce, status machine, retry, capability probe. |
@@ -50,12 +50,38 @@ Setup until paired, then a `NavigationStack` whose root is the register.
 - [mobile-server-api](../components/mobile-server-api.md) — what the Mac accepts and why it rejects.
 
 ## Design tokens
-Native SwiftUI defaults. The only colour decisions are the status dot: green for
-idle and saved, orange for waiting and saving, red for failed.
+The Drawing Set tokens in [`DESIGN.md`](../../../DESIGN.md), carried in
+`DrawingSetStyle.swift`. The status dot is the one place colour alone still varies:
+`review` blue for idle and saved, `ink-label` for waiting and saving, and red for
+failed and wrong-host, always beside a written label, never on its own.
+
+That red is the one place the app spends a saturated colour outside the issue
+stamp, which `DESIGN.md` otherwise forbids. It predates the drawing-set direction
+and is a known breach rather than an exception the design grants: either the dot
+loses its colour or `DESIGN.md` gains a second sanctioned use. Recorded so it is
+decided rather than inherited.
 
 ## Tech used
 
-**PencilKit setup** — zoom pinned to 1×, no bounce, `contentInsetAdjustmentBehavior = .never`.
+**PencilKit setup**: the canvas is a window onto a fixed sheet, not a drawing area
+the size of the view.
+
+- **The page is 1024 × 1366, portrait, always** (`SheetPage.size`). It used to be
+  whatever the view bounds were, so a sheet changed shape with the way the iPad was
+  held and the exported page changed with it.
+- **Zoom runs from fit to four times fit.** `SheetCanvasView.layoutSubviews`
+  recomputes the fit scale when the bounds change and only reassigns `zoomScale` if
+  the whole page was showing, so a rotation does not throw away someone's zoom.
+  `contentSize` follows the scale.
+- **Ruling is drawn behind the canvas**, in `SheetRulingView`, with the canvas
+  background clear. `PKCanvasViewDelegate` inherits `UIScrollViewDelegate`, so pan
+  and zoom are reported and the rules stay pinned to the page rather than the
+  screen. The ink matches the exporter's exactly, or the sheet on the iPad and the
+  page the agent reads would be two different pages.
+- **A stroke past the page grows the exported canvas** rather than being clamped to
+  it, so sheets drawn in landscape before the page had a fixed size are still sent
+  whole.
+- No bounce, `contentInsetAdjustmentBehavior = .never`.
 
 - **Drawing policy is `.default`, not `.anyInput`** — a deliberate reversal of the
   original plan. `.default` honours the system pencil-only preference, so palm and
@@ -123,9 +149,22 @@ Conversion from `PKDrawing`:
 - `DrawingSnapshot.empty(canvasSize:)` is what **Clear** posts.
 
 ## Client state
-`UploadController` is the only state machine: `idle · waiting · saving · saved · failed`.
-`.failed` presents as **"Offline"**. It also remembers the last snapshot so a manual
-retry has something to send.
+`UploadController` is the state machine for the connection:
+`idle · waiting · saving · saved · failed · wrongHost`. `.failed` presents as
+**"Offline"**. It also remembers the last snapshot so a manual retry has something
+to send.
+
+`PageStore` owns everything about the sheets: pages, series, the recorded pin, each
+sheet's ruling, and each sheet's recent states.
+
+**Sheet history.** A sheet's last twenty states are kept in a sidecar beside the
+page store, one file per sheet, so stepping back survives closing the sheet. The
+canvas's own undo stack cannot: reopening a sheet builds a fresh `PKCanvasView`.
+One state is recorded per finished stroke, which is what the stroke count changing
+signals. Stepping back and then drawing abandons what was ahead. Restoring goes
+through `PageStore.restore`, not `update`, because `update` refuses an empty drawing
+for a sheet that has strokes and a sheet stepped back past its first stroke is
+genuinely empty.
 
 ## Upload and retry
 
@@ -162,9 +201,16 @@ Errors map to actions, not codes:
 | Idle | Green dot, canvas ready. |
 | Waiting | Orange dot during the 600 ms debounce. |
 | Saving | Orange dot, request in flight. |
-| Saved | Green dot. |
-| Offline (failed) | Red dot, tappable, with the guidance above. |
-| Cleared | Canvas reset, clear signal bumped, an empty snapshot posted so the Mac's files match. |
+| Saved | Blue dot, with the time of the save in mono beside the label. |
+| Offline (failed) | Red dot, tappable. The sentence is on the notice line, not in the chip. |
+| Wrong host | Red dot, not tappable. Retrying into a machine that cannot prove itself is the thing to avoid. |
+| Cleared | Canvas reset, clear signal bumped, an empty snapshot posted so the host's files match. Recorded on both sides of the erase, so it is one step back. |
+| Ruled | The sheet carries a ruling; the snapshot goes as schema version 3 and the export carries the rules. |
+| Ruling refused | The host predates ruling, so the sheet is re-sent plain and the notice line says why once. |
+
+The status chip holds one shape in every state. Both its slots, the label and the
+time, are reserved at their widest, so the bar it sits in does not jump. Anything
+longer than a label belongs on the notice line.
 
 ## Estimate
 Shipped. Only remaining work is listed.
@@ -175,7 +221,10 @@ Shipped. Only remaining work is listed.
 | Snapshot conversion + tests | shipped |
 | Upload, debounce, retry layers | shipped |
 | TestFlight pipeline | shipped |
-| Page switcher (Phase 1) | not estimated — see [PLANNING.md](../../PLANNING.md) |
+| Page switcher (Phase 1) | shipped |
+| Swipe to delete a sheet | shipped |
+| Zoom and sheet history | shipped |
+| Ruling, per sheet, baked into the export | shipped |
 | QR pairing (Phase 2) | not estimated |
 | Incremental upload (Phase 4) | not estimated |
 | **Total** | — |
@@ -183,8 +232,10 @@ Shipped. Only remaining work is listed.
 ## Tasks
 - [ ] Skip the upload when the drawing has not changed since the last successful one
       — the cheapest fix for the resend cost.
-- [x] Replace URL paste with QR scanning. **The scanner compiles but has not been
-      run on a device** — pasting the payload is the tested path.
+- [x] Replace URL paste with QR scanning. The preview follows the device through
+      `AVCaptureDevice.RotationCoordinator`, so the camera and the tablet agree about
+      which way is up. **Still to be run on a device**: pasting the payload remains
+      the tested path.
 - [ ] Update a paired host's address when it moves, rather than needing a re-pair.
       The identity already survives the move; only the stored address does not.
 

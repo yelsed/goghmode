@@ -113,7 +113,17 @@ The QR code is the one that makes the problem irrelevant rather than merely visi
 
 ## 5. Obsidian link
 
-I also want there to be a link to Obsidian. That is for later.
+**Answered, August 2026: by clipboard, not by writing into the vault.**
+
+`goghmode copy` puts the stamped sheet's PNG on the system clipboard and
+`goghmode install-raycast` gives it a hotkey, so one keypress and a paste drops the
+drawing wherever the cursor already is: an Obsidian note, a chat window, anywhere
+that takes an image. Obsidian files a pasted image into its own attachment folder,
+so the vault side needs nothing built.
+
+Writing a sheet into the vault as a markdown note is still open. It needs a name, a
+folder, and an answer for what happens when the same sheet is sent twice, and none
+of those are needed to paste a picture. The original sketch is kept below.
 
 `docs/ai-field-notebook-vision.md` already sketches the shape: Obsidian as a storage and review layer
 rather than a capture surface, with a page becoming a markdown note with metadata plus a linked image

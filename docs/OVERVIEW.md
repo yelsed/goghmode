@@ -58,18 +58,30 @@ The companion ships via a GitHub Actions workflow that tests on a simulator, sig
 and uploads to App Store Connect. See **Releasing the iPad companion** in
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
-### 🔵 Multiple pages and a notes overview
-Today there is exactly one page and it is overwritten. Saving several pages and
-browsing them back is the highest-value missing feature — doubt about whether
-written work survives is enough to stop someone writing. It needs decisions about
-where history lives and who owns page identity first; see [PLANNING.md](PLANNING.md)
-and [OPEN-QUESTIONS](specs/OPEN-QUESTIONS.md).
+### 🟢 A register of sheets
+Every page is a sheet in a numbered drawing set, kept on the iPad and mirrored on
+the host. Exactly one sheet carries the issue stamp, and that is the one the agent
+reads. Sheets can be renamed, stacked into a series, swiped away, and stepped back
+through: a sheet keeps its last twenty states, so closing it and opening it again
+does not lose the ability to take a stroke back.
+See [ipad-companion](specs/pages/ipad-companion.md).
 
-### 🔵 Pairing without copy-paste
-Connecting the iPad means pasting a long URL from the Mac. A QR code on the Mac
-would make re-pairing a two-second job, and would also defuse a real trap: if port
-8787 is taken the server silently moves, and the old URL keeps looking correct while
-pointing at nothing.
+### 🟢 Ruling on the sheet
+A sheet can be plain, lined, squared or dotted, chosen per sheet. The rules are
+drawn into the exported PNG and SVG under the ink, so the page the agent reads is
+the page that was written on. Off by default.
+See [ADR-0007](decisions/0007-ruling-is-a-writing-aid-not-a-texture.md).
+
+### 🟢 Paste the latest sheet anywhere
+`goghmode copy` puts the stamped sheet on the system clipboard, and
+`goghmode install-raycast` gives it a hotkey. One keypress, then paste: into an
+Obsidian note, a chat window, anywhere that takes an image. See the README.
+
+### 🟢 Pairing by QR code
+The host shows a pairing code, the iPad scans it with the camera, and the person at
+the host approves the device. The long-lived key is derived on both sides rather
+than sent, so nothing secret crosses the network.
+See [ADR-0006](decisions/0006-paired-devices-over-shared-url-token.md).
 
 ### 🔵 Photo and snapshot import
 Sending an existing photo of a paper page through the same bridge, so the physical
