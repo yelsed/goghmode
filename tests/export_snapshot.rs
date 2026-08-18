@@ -354,3 +354,38 @@ fn dotted_ruling_marks_the_crossings_rather_than_drawing_lines() {
     assert_eq!(image.get_pixel(25, 25).0, [201, 196, 187, 255]);
     assert_eq!(image.get_pixel(12, 12).0, [255, 255, 255, 255]);
 }
+
+/// The one thing that cannot be shared across the language boundary, so it is
+/// guarded instead.
+///
+/// The iPad draws the ruling on screen and this crate draws it again into the
+/// PNG the agent reads. Those are two implementations of one appearance, and the
+/// whole promise of ruling is that the page the agent reads is the page that was
+/// written on. If the two inks drift, nothing else notices.
+///
+/// A source grep for the same reason `tests/app_mobile_url.rs` uses one: there is
+/// no way to link the two and no way to snapshot them together.
+#[test]
+fn the_ipad_rules_a_sheet_in_the_same_ink_the_exporter_bakes_in() {
+    let swift = std::fs::read_to_string(
+        "ipad-companion/GoghModeCompanion/DrawingSetStyle.swift",
+    )
+    .expect("the companion's tokens should be readable from the repository root");
+
+    // #C9C4BB, which is `rule-hair` in DESIGN.md, written as SwiftUI components.
+    assert!(
+        swift.contains("red: 0.788, green: 0.769, blue: 0.733"),
+        "Sheet.rulingInk no longer matches the exporter's RULING_INK"
+    );
+
+    let expected: [u8; 3] = [
+        (0.788 * 255.0_f32).round() as u8,
+        (0.769 * 255.0_f32).round() as u8,
+        (0.733 * 255.0_f32).round() as u8,
+    ];
+    let snapshot = ruled_snapshot(drawing::RulingStyle::Lines, 32.0);
+    let image = snapshot_to_rgba(&snapshot);
+    let rule = image.get_pixel(10, 32).0;
+
+    assert_eq!([rule[0], rule[1], rule[2]], expected);
+}
