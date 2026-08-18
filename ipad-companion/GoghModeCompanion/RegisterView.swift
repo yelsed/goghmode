@@ -32,18 +32,17 @@ struct RegisterView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                if nothingDrawnYet {
+        Group {
+            if nothingDrawnYet {
+                ScrollView {
                     EmptyRegister(onStart: { onOpen(store.pages.first?.id ?? store.selectedPageID) })
                         .padding(.top, 40)
-                } else {
-                    lines
                 }
+                .background(Sheet.ground)
+            } else {
+                lines
             }
-            .padding(.bottom, Sheet.margin)
         }
-        .background(Sheet.ground)
         .navigationTitle("Pages")
         .navigationBarTitleDisplayMode(.large)
         .safeAreaInset(edge: .top, spacing: 0) { registerHead }
@@ -136,6 +135,12 @@ struct RegisterView: View {
     /// One line of plain language for whatever is currently wrong, most urgent
     /// first. Silence here has to mean "nothing is wrong", or the register lies.
     private var notice: String? {
+        // Ahead of `failed` on purpose: a machine that cannot prove it is the
+        // paired host must not be retried into, so its sentence outranks one that
+        // invites a retry.
+        if case .wrongHost(let message) = uploader.status {
+            return message
+        }
         if case .failed(let message) = uploader.status {
             return message
         }
@@ -152,55 +157,54 @@ struct RegisterView: View {
     /// set's register is a ruled index of sheets, so this is a table with aligned
     /// columns — not cards, and not a plain iOS list either.
     private var lines: some View {
-        LazyVStack(spacing: 0) {
-            RegisterHeader()
-            Rectangle().fill(Sheet.rule).frame(height: Sheet.hair)
+        let entries = store.register
 
-            ForEach(Array(store.register.enumerated()), id: \.element.id) { index, entry in
-                if index > 0 {
-                    Rectangle().fill(Sheet.ruleHair).frame(height: Sheet.hair)
-                }
-
-                switch entry {
-                case .sheet(let page):
-                    SheetRow(
-                        page: page,
-                        number: store.sheetNumber(for: page),
-                        isIssued: page.id == store.pinnedPageID,
-                        stampState: stampState(for: page),
-                        onOpen: { onOpen(page.id) },
-                        onStamp: { toggleStamp(page) }
-                    )
-                    .onDrag { NSItemProvider(object: page.id as NSString) }
-                    .onDrop(
-                        of: [UTType.plainText],
-                        delegate: StackDrop(store: store, targetID: page.id)
-                    )
-                    .contextMenu { menu(for: page) }
-
-                case .series(let series, let filed):
-                    SeriesRow(
-                        series: series,
-                        sheets: filed,
-                        containsIssued: filed.contains { $0.id == store.pinnedPageID },
-                        onOpen: { openSeries = series }
-                    )
-                    .contextMenu {
-                        Button {
-                            renaming = .series(series)
-                        } label: {
-                            Label("Rename series", systemImage: "pencil")
-                        }
-                    }
+        return RuledList(rowCount: entries.count) { index in
+            line(for: entries[index])
+        } swipe: { index in
+            if case .sheet(let page) = entries[index] {
+                Button(role: .destructive) {
+                    deleting = page
+                } label: {
+                    Label("Delete", systemImage: "trash")
                 }
             }
         }
-        .background(Sheet.paper)
-        .overlay(alignment: .top) {
-            Rectangle().fill(Sheet.edge).frame(height: Sheet.hair)
-        }
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(Sheet.edge).frame(height: Sheet.hair)
+    }
+
+    @ViewBuilder
+    private func line(for entry: RegisterEntry) -> some View {
+        switch entry {
+        case .sheet(let page):
+            SheetRow(
+                page: page,
+                number: store.sheetNumber(for: page),
+                isIssued: page.id == store.pinnedPageID,
+                stampState: stampState(for: page),
+                onOpen: { onOpen(page.id) },
+                onStamp: { toggleStamp(page) }
+            )
+            .onDrag { NSItemProvider(object: page.id as NSString) }
+            .onDrop(
+                of: [UTType.plainText],
+                delegate: StackDrop(store: store, targetID: page.id)
+            )
+            .contextMenu { menu(for: page) }
+
+        case .series(let series, let filed):
+            SeriesRow(
+                series: series,
+                sheets: filed,
+                containsIssued: filed.contains { $0.id == store.pinnedPageID },
+                onOpen: { openSeries = series }
+            )
+            .contextMenu {
+                Button {
+                    renaming = .series(series)
+                } label: {
+                    Label("Rename series", systemImage: "pencil")
+                }
+            }
         }
     }
 
@@ -354,6 +358,70 @@ extension EnvironmentValues {
     }
 }
 
+/// The ruled block both registers are drawn on: one sheet of paper laid on the
+/// register ground, a head row of column names, and hairline rules between lines.
+///
+/// A `List` rather than the `LazyVStack` this used to be, and only for one reason:
+/// swipe-to-delete is a list affordance and cannot be had without one. Every list
+/// treatment that would otherwise show through is turned off, so the block still
+/// reads as paper rather than as a plain iOS list.
+struct RuledList<Row: View, Swipe: View>: View {
+    let rowCount: Int
+    @ViewBuilder var row: (Int) -> Row
+    @ViewBuilder var swipe: (Int) -> Swipe
+
+    var body: some View {
+        List {
+            head.registerRow()
+
+            ForEach(0..<rowCount, id: \.self) { index in
+                VStack(spacing: 0) {
+                    if index > 0 {
+                        Rectangle().fill(Sheet.ruleHair).frame(height: Sheet.hair)
+                    }
+                    row(index)
+                }
+                .registerRow()
+                // Full swipe is off on purpose: deleting a sheet is the one action
+                // here with nothing behind it, so it has to be aimed at.
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    swipe(index)
+                }
+            }
+
+            Rectangle()
+                .fill(Sheet.edge)
+                .frame(height: Sheet.hair)
+                .registerRow()
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(Sheet.ground)
+        // Rows here are as short as a single hairline, and the list's own floor
+        // would otherwise pad each of them out to a tap target.
+        .environment(\.defaultMinListRowHeight, 0)
+        .contentMargins(.bottom, Sheet.margin, for: .scrollContent)
+    }
+
+    private var head: some View {
+        VStack(spacing: 0) {
+            Rectangle().fill(Sheet.edge).frame(height: Sheet.hair)
+            RegisterHeader()
+            Rectangle().fill(Sheet.rule).frame(height: Sheet.hair)
+        }
+    }
+}
+
+private extension View {
+    /// A list row that is a line on a sheet of paper: no inset, no separator, and
+    /// the paper itself behind it.
+    func registerRow() -> some View {
+        listRowInsets(EdgeInsets())
+            .listRowSeparator(.hidden)
+            .listRowBackground(Sheet.paper)
+    }
+}
+
 /// The ruled head of the register: the column names, in drafting lettering.
 struct RegisterHeader: View {
     @Environment(\.registerColumns) private var columns
@@ -490,7 +558,7 @@ struct SeriesRow: View {
         } trailing: {
             Group {
                 if containsIssued {
-                    IssueStamp(scale: 0.68)
+                    IssuedMark()
                 } else {
                     Color.clear
                 }
@@ -576,7 +644,7 @@ struct StampControl: View {
     private var face: some View {
         switch state {
         case .issued:
-            IssueStamp(scale: 0.68)
+            IssuedMark()
                 .transition(
                     reduceMotion ? .opacity : .scale(scale: 1.25).combined(with: .opacity)
                 )
@@ -590,17 +658,12 @@ struct StampControl: View {
                 .foregroundStyle(Sheet.inkLabel)
                 .padding(.leading, 4)
         case .available:
-            HStack(spacing: 5) {
-                Image(systemName: "seal")
-                Text("STAMP").tracking(0.8)
-            }
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(Sheet.inkLabel)
-            .padding(.horizontal, 9)
-            .frame(height: 30)
-            .overlay {
-                Rectangle().strokeBorder(Sheet.rule, lineWidth: Sheet.hair)
-            }
+            StampFace(
+                symbol: "seal",
+                text: "Stamp",
+                tint: Sheet.inkLabel,
+                border: Sheet.rule
+            )
         }
     }
 
@@ -772,46 +835,17 @@ struct SeriesView: View {
     @State private var deleting: NotebookPage?
 
     var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                RegisterHeader()
-                Rectangle().fill(Sheet.rule).frame(height: Sheet.hair)
+        let sheets = store.sheets(in: series.id)
 
-                ForEach(Array(store.sheets(in: series.id).enumerated()), id: \.element.id) { index, page in
-                    if index > 0 {
-                        Rectangle().fill(Sheet.ruleHair).frame(height: Sheet.hair)
-                    }
-                    SheetRow(
-                        page: page,
-                        number: store.sheetNumber(for: page),
-                        isIssued: page.id == store.pinnedPageID,
-                        stampState: stampState(for: page),
-                        onOpen: { onOpen(page.id) },
-                        onStamp: { onStamp(page) }
-                    )
-                    .contextMenu {
-                        Button { onRename(page) } label: {
-                            Label("Rename", systemImage: "pencil")
-                        }
-                        Button { store.removeFromSeries(page.id) } label: {
-                            Label("Take out of series", systemImage: "rectangle.stack.badge.minus")
-                        }
-                        Button(role: .destructive) { deleting = page } label: {
-                            Label("Delete sheet", systemImage: "trash")
-                        }
-                    }
-                }
+        RuledList(rowCount: sheets.count) { index in
+            line(for: sheets[index])
+        } swipe: { index in
+            Button(role: .destructive) {
+                deleting = sheets[index]
+            } label: {
+                Label("Delete", systemImage: "trash")
             }
-            .background(Sheet.paper)
-            .overlay(alignment: .top) {
-                Rectangle().fill(Sheet.edge).frame(height: Sheet.hair)
-            }
-            .overlay(alignment: .bottom) {
-                Rectangle().fill(Sheet.edge).frame(height: Sheet.hair)
-            }
-            .padding(.vertical, 4)
         }
-        .background(Sheet.ground)
         .navigationTitle(series.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -822,6 +856,28 @@ struct SeriesView: View {
             }
         }
         .deleteSheetDialog(sheet: $deleting) { store.delete($0.id) }
+    }
+
+    private func line(for page: NotebookPage) -> some View {
+        SheetRow(
+            page: page,
+            number: store.sheetNumber(for: page),
+            isIssued: page.id == store.pinnedPageID,
+            stampState: stampState(for: page),
+            onOpen: { onOpen(page.id) },
+            onStamp: { onStamp(page) }
+        )
+        .contextMenu {
+            Button { onRename(page) } label: {
+                Label("Rename", systemImage: "pencil")
+            }
+            Button { store.removeFromSeries(page.id) } label: {
+                Label("Take out of series", systemImage: "rectangle.stack.badge.minus")
+            }
+            Button(role: .destructive) { deleting = page } label: {
+                Label("Delete sheet", systemImage: "trash")
+            }
+        }
     }
 
     private func stampState(for page: NotebookPage) -> StampState {

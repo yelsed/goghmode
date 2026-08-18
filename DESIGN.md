@@ -39,10 +39,10 @@ typography:
     letterSpacing: "0.02em"
   stamp:
     fontFamily: "SF Pro Text"
-    fontSize: "13px"
-    fontWeight: 800
-    lineHeight: 1.05
-    letterSpacing: "0.10em"
+    fontSize: "12px"
+    fontWeight: 600
+    lineHeight: 1.1
+    letterSpacing: "0.067em"
 rounded:
   sheet: "2px"
   control: "8px"
@@ -63,10 +63,16 @@ components:
   block-field-label:
     textColor: "{colors.ink-label}"
     typography: "{typography.block-label}"
-  issue-stamp:
+  issued-mark:
     textColor: "{colors.stamp}"
+    borderColor: "{colors.stamp}"
     typography: "{typography.stamp}"
-    padding: "6px 10px"
+    padding: "0 9px"
+    height: "30px"
+  sheet-ruling:
+    color: "{colors.rule-hair}"
+    spacing: "32px"
+    styles: [plain, lines, grid, dots]
 ---
 
 # GoghMode — Drawing Set
@@ -158,10 +164,18 @@ content.
   empty state's blank sheet.
 - **Stamp control** — the one control answering "which sheet does the agent read?".
   Unstamped it is a quiet ruled button reading `STAMP`; on the stamped sheet the
-  control *is* the stamp, and pressing it lifts the stamp again. Exactly one stamp
-  exists across the whole register.
-- **Issue stamp** — uppercase, letter-spaced, rotated 2–3°, uneven ink edges,
-  arriving with a short impact settle.
+  control *is* the mark, and pressing it lifts the stamp again. Both states share
+  one box, so only the ink changes. Exactly one stamp exists across the whole
+  register.
+- **Issued mark**: uppercase, letter-spaced, in stamp red, in the same box the
+  `STAMP` button uses, so the `AGENT` column does not shift when a sheet is
+  stamped or lifted. It arrives with a short impact settle, which is where the
+  satisfaction of stamping lives. It is not rotated: a block set off-axis inside a
+  table fights the column alignment the register depends on.
+- **Status chip**: connection state as a dot, a label, and the time of the last
+  save. Every slot is reserved at its widest, so the chip is one size in every
+  state and the bar it sits in does not jump. Anything longer than a label, a
+  failure and its remedy, belongs on the notice line under the head, not in here.
 - **Series** — a stack. Lettered prefix, offset previews standing in for the sheets,
   count in the `UPDATED` column, sheets numbered within it.
 - **Sheet preview** — 40×54, rendered from a source rect that grows to cover the
@@ -179,7 +193,9 @@ content.
   register is for finding a sheet, not for reading it.
 - **Don't** render the register as a stack of cards, or as a plain iOS list with
   `.secondary` grey captions — both forfeit the whole direction.
-- **Don't** add blueprint grids, drafting-paper textures, or graph-paper backgrounds.
-  The sheet is white; the linework is the user's drawing.
+- **Don't** put ruling anywhere except inside the drawing area, and never as a
+  background for a screen. A sheet is plain unless someone chose otherwise; see
+  [ADR-0007](docs/decisions/0007-ruling-is-a-writing-aid-not-a-texture.md). Textures
+  and blueprint grids as decoration are still refused.
 - **Don't** use monospace for anything except numbers and measurements.
 - **Don't** introduce shadows on resting sheets, or a border under a shadow.

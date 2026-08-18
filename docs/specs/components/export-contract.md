@@ -13,9 +13,12 @@ page. See [ADR-0001](../../decisions/0001-drawings-latest-as-the-agent-contract.
 ### `DrawingSnapshot` — the wire format
 ```jsonc
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "page": { "id": "9F2C4A1B", "title": "Server sketch" },
-  "canvas": { "width": 1100.0, "height": 699.5, "background": "#ffffff" },
+  "canvas": {
+    "width": 1024.0, "height": 1366.0, "background": "#ffffff",
+    "ruling": { "style": "grid", "spacing": 32.0 }
+  },
   "strokes": [
     {
       "id": "stroke-1",
@@ -29,11 +32,14 @@ page. See [ADR-0001](../../decisions/0001-drawings-latest-as-the-agent-contract.
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `schemaVersion` | `u8` | `1` or `2`. Current writers send `2`; `1` is still accepted so installed clients keep working. `#[serde(rename)]` on the Rust side; the Swift and JavaScript clients spell it out. |
+| `schemaVersion` | `u8` | `1`, `2` or `3`. A plain sheet still goes as `2`, so nothing changed for anyone not using ruling; `3` is sent only by a sheet that carries ruling. `1` is still accepted so installed clients keep working. `#[serde(rename)]` on the Rust side; the Swift and JavaScript clients spell it out. |
 | `page.id` | `String` | Required at version 2, absent at version 1. Minted by the client that created the page and immutable after. Becomes a directory name, so the server restricts it to `[A-Za-z0-9_-]{1,64}`. |
 | `page.title` | `String?` | Optional label for the overview. Up to 200 characters. |
-| `canvas.width` / `.height` | `f32` | The live drawing surface size, not a fixed page size. |
-| `canvas.background` | `String` | Sent by clients, **ignored on export** — the SVG hardcodes `#ffffff`. |
+| `canvas.width` / `.height` | `f32` | The page. The iPad sends a fixed 1024 × 1366 sheet, grown to cover anything drawn past it. The web client still sends its live surface size. |
+| `canvas.background` | `String` | Sent by clients, **ignored on export**: both writers paint white. Kept in the schema rather than removed, because two shipped clients send it. |
+| `canvas.ruling` | `Ruling?` | Absent on a plain sheet, which is every sheet unless someone chose otherwise. See [ADR-0007](../../decisions/0007-ruling-is-a-writing-aid-not-a-texture.md). |
+| `canvas.ruling.style` | `String` | `lines`, `grid` or `dots`. |
+| `canvas.ruling.spacing` | `f32` | In page units. 8 to 256 accepted by the server. |
 | `stroke.id` | `String` | `"stroke-{n}"`. Unique within a snapshot; not stable across edits on iPad. |
 | `stroke.color` | `String` | Honoured by SVG, JSON and the PNG rasterizer. |
 | `stroke.width` | `f32` | 0.5–80 accepted by the server. |
@@ -49,6 +55,15 @@ A superset of the snapshot, adding:
   reading only the JSON still learns where they are.
 
 Pretty-printed, not minified.
+
+### Ruling in the written files
+The rules are drawn **under** the strokes in both the SVG and the PNG, so the page
+the agent reads is the page that was drawn on. The ink is fixed in the exporter at
+`rule-hair` (`#C9C4BB`) and is never taken from the payload, so nothing on the
+network can put arbitrary marks into that file. The first rule falls one space in
+from the edge, on both writers, so the iPad and the export agree.
+
+A snapshot with no `ruling` exports byte-for-byte as it always did.
 
 ### Where it lands
 ```text
@@ -154,11 +169,18 @@ Shipped. Only remaining work is listed.
 
 ## Tasks
 - [x] Honour `stroke.color` in the PNG rasterizer.
-- [ ] Decide whether `canvas.background` should be honoured or removed from the
-      schema, since nothing uses it today.
-- [ ] Deletion and renaming of pages. The current design only ever writes.
+- [x] Decide whether `canvas.background` should be honoured or removed from the
+      schema. **Kept, still ignored.** Two shipped clients send it, and removing a
+      field from a schema three clients write is a break for the sake of tidiness.
+      Ruling is what the sheet's appearance is carried by now.
+- [x] Draw ruling into the PNG and the SVG, under the strokes.
+- [ ] Deletion and renaming of pages on the host. The iPad deletes its own copy;
+      the host still only ever writes.
 
 ## Open questions
+- ~~Should ruling exist at all, given the design refused grids?~~ **Answered: yes,
+  as a per-sheet writing aid, drawn into the export.** See
+  [ADR-0007](../../decisions/0007-ruling-is-a-writing-aid-not-a-texture.md).
 - ~~When `schemaVersion` goes to 2, does the Mac accept version 1 uploads from older
   clients, or refuse them?~~ **Answered: it accepts both.** The server takes `{1, 2}`
   and files version 1 uploads under a reserved `legacy` page, so a client that

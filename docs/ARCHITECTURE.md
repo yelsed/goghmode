@@ -69,7 +69,10 @@ through one function.
 | `src/main.rs` | Entry point, clap CLI, module root, drawings-directory resolution, window setup. |
 | `src/app.rs` | `GoghModeApp` — toolbar, canvas input, clipboard actions, status bar. Owns the `MobileServer`. |
 | `src/drawing.rs` | Pure in-memory stroke model: `Point`, `Stroke`, `CanvasSize`, `DrawingSnapshot`, and the `Drawing` mutation API. No I/O, no UI. |
-| `src/export.rs` | Snapshot → SVG string, RGBA raster, JSON; the atomic write of the three `latest.*` files. |
+| `src/export.rs` | Snapshot → SVG string, RGBA raster, JSON; the sheet's ruling drawn under the strokes in both writers; the atomic write of the three `latest.*` files. |
+| `src/pages.rs` | One directory per page under `drawings/pages/`, the rebuilt index, the pin, and the `latest.*` mirror. |
+| `src/clipboard.rs` | Reading a written sheet back off disk and putting it on the system clipboard, for `goghmode copy`. |
+| `src/raycast.rs` | The Raycast script command text and its installer. |
 | `src/mobile_server.rs` | Blocking HTTP/1.1 server: serves the embedded web app, accepts snapshot uploads, validates them. |
 | `src/prompt.rs` | Two hardcoded prompt strings (generic and Claude) plus `PromptTarget`. |
 | `src/skill.rs` | The embedded `SKILL.md` text and its installer. |

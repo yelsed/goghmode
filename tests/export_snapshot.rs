@@ -275,3 +275,82 @@ fn stamping_a_sheet_keeps_the_time_it_was_drawn() {
         "a stamped sheet must keep its own time, or an old sketch reads as freshly drawn"
     );
 }
+
+/// The ruling is a writing aid the person chose, and the point of baking it in is
+/// that the page the agent reads is the page that was drawn on.
+fn ruled_snapshot(style: drawing::RulingStyle, spacing: f32) -> drawing::DrawingSnapshot {
+    drawing::DrawingSnapshot {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        page: None,
+        canvas: drawing::CanvasSize {
+            width: 100.0,
+            height: 100.0,
+            background: "#ffffff".to_owned(),
+            ruling: Some(drawing::Ruling {
+                style,
+                spacing,
+            }),
+        },
+        strokes: Vec::new(),
+    }
+}
+
+#[test]
+fn a_ruled_sheet_carries_its_rules_into_the_png_and_the_svg() {
+    let snapshot = ruled_snapshot(drawing::RulingStyle::Grid, 32.0);
+
+    let svg = export::snapshot_to_svg(&snapshot);
+    assert!(svg.contains("#C9C4BB"), "ruling ink missing from the svg");
+    assert!(svg.contains("<line"), "grid ruling should be drawn as lines");
+
+    let image = snapshot_to_rgba(&snapshot);
+    let ruled = image.get_pixel(10, 32);
+    let blank = image.get_pixel(10, 16);
+    assert_eq!(ruled.0, [201, 196, 187, 255], "no rule where one belongs");
+    assert_eq!(blank.0, [255, 255, 255, 255], "a rule where none belongs");
+}
+
+#[test]
+fn a_plain_sheet_exports_exactly_as_it_always_did() {
+    let mut snapshot = ruled_snapshot(drawing::RulingStyle::Grid, 32.0);
+    snapshot.canvas.ruling = None;
+
+    let svg = export::snapshot_to_svg(&snapshot);
+    assert!(!svg.contains("<line"), "an unruled sheet gained rules");
+
+    let image = snapshot_to_rgba(&snapshot);
+    assert_eq!(image.get_pixel(10, 32).0, [255, 255, 255, 255]);
+
+    let temp = tempfile::tempdir().unwrap();
+    write_artifacts(&snapshot, temp.path(), "latest", "drawings/", None).unwrap();
+    let json = fs::read_to_string(temp.path().join("latest.json")).unwrap();
+    assert!(
+        !json.contains("ruling"),
+        "an unruled sheet should not mention ruling at all"
+    );
+}
+
+#[test]
+fn ruled_lines_stay_inside_the_page() {
+    let snapshot = ruled_snapshot(drawing::RulingStyle::Lines, 100.0);
+
+    // The only stop would be at the page edge itself, which is not a rule.
+    let svg = export::snapshot_to_svg(&snapshot);
+    assert!(!svg.contains("<line"));
+
+    let image = snapshot_to_rgba(&snapshot);
+    assert_eq!(image.get_pixel(10, 99).0, [255, 255, 255, 255]);
+}
+
+#[test]
+fn dotted_ruling_marks_the_crossings_rather_than_drawing_lines() {
+    let snapshot = ruled_snapshot(drawing::RulingStyle::Dots, 25.0);
+
+    let svg = export::snapshot_to_svg(&snapshot);
+    assert!(svg.contains("<circle"), "dots should be drawn as circles");
+    assert!(!svg.contains("<line"));
+
+    let image = snapshot_to_rgba(&snapshot);
+    assert_eq!(image.get_pixel(25, 25).0, [201, 196, 187, 255]);
+    assert_eq!(image.get_pixel(12, 12).0, [255, 255, 255, 255]);
+}

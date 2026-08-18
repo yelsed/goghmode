@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use image::{Rgba, RgbaImage};
 use serde::Serialize;
 
-use crate::drawing::{DrawingSnapshot, PageRef, Point, Stroke};
+use crate::drawing::{DrawingSnapshot, PageRef, Point, Ruling, RulingStyle, Stroke};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExportedFiles {
@@ -44,6 +44,10 @@ pub fn snapshot_to_svg(snapshot: &DrawingSnapshot) -> String {
         width, height, width, height
     ));
     svg.push_str("<rect width=\"100%\" height=\"100%\" fill=\"#ffffff\"/>\n");
+
+    if let Some(ruling) = snapshot.canvas.ruling {
+        push_ruling_svg(&mut svg, ruling, width as f32, height as f32);
+    }
 
     for stroke in &snapshot.strokes {
         let points: Vec<&Point> = stroke
@@ -96,6 +100,10 @@ pub fn snapshot_to_rgba(snapshot: &DrawingSnapshot) -> RgbaImage {
     let width = canvas_extent(snapshot.canvas.width);
     let height = canvas_extent(snapshot.canvas.height);
     let mut image = RgbaImage::from_pixel(width, height, Rgba([255, 255, 255, 255]));
+
+    if let Some(ruling) = snapshot.canvas.ruling {
+        paint_ruling(&mut image, ruling);
+    }
 
     for stroke in &snapshot.strokes {
         let mut points = stroke.points.iter().filter(|point| {
@@ -181,6 +189,119 @@ pub fn write_artifacts(
         png: png_path,
         updated_at,
     })
+}
+
+/// Ruling ink is fixed here rather than sent by the client, so nothing on the
+/// network can put arbitrary marks in the file the agent reads. The value is
+/// `rule-hair` from DESIGN.md: visible enough to write against, faint enough to
+/// stay under the ink.
+const RULING_INK: Rgba<u8> = Rgba([201, 196, 187, 255]);
+const RULING_INK_HEX: &str = "#C9C4BB";
+
+/// Where the rules fall across one axis. The first rule is one space in, so the
+/// page does not start on a line sitting against its own edge.
+fn ruling_stops(extent: f32, spacing: f32) -> Vec<f32> {
+    if !spacing.is_finite() || spacing < crate::drawing::MIN_RULING_SPACING {
+        return Vec::new();
+    }
+
+    let mut stops = Vec::new();
+    let mut at = spacing;
+    while at < extent {
+        stops.push(at);
+        at += spacing;
+    }
+    stops
+}
+
+fn push_ruling_svg(svg: &mut String, ruling: Ruling, width: f32, height: f32) {
+    let down = ruling_stops(height, ruling.spacing);
+    let across = ruling_stops(width, ruling.spacing);
+
+    match ruling.style {
+        RulingStyle::Lines => {
+            for y in down {
+                push_ruling_line_svg(svg, 0.0, y, width, y);
+            }
+        }
+        RulingStyle::Grid => {
+            for y in down {
+                push_ruling_line_svg(svg, 0.0, y, width, y);
+            }
+            for x in across {
+                push_ruling_line_svg(svg, x, 0.0, x, height);
+            }
+        }
+        RulingStyle::Dots => {
+            for y in &down {
+                for x in &across {
+                    svg.push_str(&format!(
+                        "<circle cx=\"{}\" cy=\"{}\" r=\"1\" fill=\"{}\"/>\n",
+                        svg_number(*x),
+                        svg_number(*y),
+                        RULING_INK_HEX
+                    ));
+                }
+            }
+        }
+    }
+}
+
+fn push_ruling_line_svg(svg: &mut String, x1: f32, y1: f32, x2: f32, y2: f32) {
+    svg.push_str(&format!(
+        "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"1\"/>\n",
+        svg_number(x1),
+        svg_number(y1),
+        svg_number(x2),
+        svg_number(y2),
+        RULING_INK_HEX
+    ));
+}
+
+fn paint_ruling(image: &mut RgbaImage, ruling: Ruling) {
+    let width = image.width();
+    let height = image.height();
+    let down = ruling_stops(height as f32, ruling.spacing);
+    let across = ruling_stops(width as f32, ruling.spacing);
+
+    let paint_row = |y: f32, image: &mut RgbaImage| {
+        let row = y.round() as u32;
+        if row >= height {
+            return;
+        }
+        for column in 0..width {
+            image.put_pixel(column, row, RULING_INK);
+        }
+    };
+
+    match ruling.style {
+        RulingStyle::Lines => {
+            for y in down {
+                paint_row(y, image);
+            }
+        }
+        RulingStyle::Grid => {
+            for y in down {
+                paint_row(y, image);
+            }
+            for x in across {
+                let column = x.round() as u32;
+                if column >= width {
+                    continue;
+                }
+                for row in 0..height {
+                    image.put_pixel(column, row, RULING_INK);
+                }
+            }
+        }
+        RulingStyle::Dots => {
+            for y in &down {
+                for x in &across {
+                    fill_brush(image, x.round() as i32, y.round() as i32, 1.0, RULING_INK);
+                }
+            }
+        }
+    }
 }
 
 fn canvas_extent(value: f32) -> u32 {

@@ -51,6 +51,41 @@ This creates:
 
 After that, you can use `/goghmode` in Claude Code.
 
+## Copy a sheet to the clipboard
+
+Put a saved drawing on the system clipboard without opening the app:
+
+```bash
+goghmode copy
+```
+
+Without arguments it copies the sheet your agent reads: the stamped one, or the one drawn on last
+if nothing is stamped. It prints which file it copied and how long ago that sheet was saved, so a
+fresh sketch is easy to tell apart from yesterday's. To copy some other page, pass its id from
+`pages/index.json`:
+
+```bash
+goghmode copy --page 9F2C4A1B
+```
+
+`--drawings-dir` works here too, for drawings kept somewhere other than the default directory.
+
+### Bind it to a hotkey with Raycast
+
+```bash
+goghmode install-raycast
+```
+
+This creates:
+
+```text
+~/Library/Application Support/GoghMode/raycast/copy-latest-sheet.sh
+```
+
+One manual step is left. In Raycast, open Extensions, Script Commands, add that folder, then give
+`Copy latest GoghMode sheet` a hotkey. The newest sheet is then one keypress away from any field
+you can paste an image into.
+
 ## Open the app
 
 Use either path:

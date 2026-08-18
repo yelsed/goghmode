@@ -433,11 +433,11 @@ fn unknown_schema_versions_are_refused_with_a_reason_the_companion_can_read() {
     let (_host_dir, host) = test_host();
     let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
 
-    let response = save_snapshot(&server, &snapshot_body(3, ""));
+    let response = save_snapshot(&server, &snapshot_body(4, ""));
 
     assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
-    assert!(response.contains("unsupported schemaVersion 3"));
-    assert!(response.contains("understands 1 and 2"));
+    assert!(response.contains("unsupported schemaVersion 4"));
+    assert!(response.contains("understands 1, 2 and 3"));
     assert!(!directory.path().join("latest.json").exists());
 }
 
@@ -451,8 +451,9 @@ fn capabilities_endpoint_tells_a_companion_which_schema_versions_this_mac_takes(
 
     assert!(response.starts_with("HTTP/1.1 200 OK"));
     assert!(response.contains("application/json"));
-    assert!(response.contains("\"schemaVersions\":[1,2]"));
+    assert!(response.contains("\"schemaVersions\":[1,2,3]"));
     assert!(response.contains("pages"));
+    assert!(response.contains("ruling"));
 
     let unknown = http_request(server.url(), "GET", &format!("{base_path}capability"));
     assert!(unknown.starts_with("HTTP/1.1 404 Not Found"));

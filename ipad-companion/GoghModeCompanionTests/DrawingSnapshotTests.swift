@@ -415,3 +415,94 @@ final class UnreachableMacProtocol: URLProtocol {
 
     override func stopLoading() {}
 }
+
+final class SheetPageAndRulingTests: XCTestCase {
+    private func drawing(to corner: CGPoint) -> PKDrawing {
+        let points = [CGPoint(x: 5, y: 5), corner].map { location in
+            PKStrokePoint(
+                location: location,
+                timeOffset: 0,
+                size: CGSize(width: 4, height: 4),
+                opacity: 1,
+                force: 0.5,
+                azimuth: 0,
+                altitude: 0
+            )
+        }
+        return PKDrawing(strokes: [
+            PKStroke(
+                ink: PKInk(.pen, color: .black),
+                path: PKStrokePath(controlPoints: points, creationDate: Date())
+            )
+        ])
+    }
+
+    /// The sheet is a page, not the view it is shown in, so what is exported does
+    /// not change with the way the iPad is held.
+    func testASheetIsExportedAtPageSize() throws {
+        let snapshot = DrawingSnapshot.fromPencilDrawing(
+            drawing(to: CGPoint(x: 100, y: 100)),
+            canvasSize: SheetPage.size
+        )
+
+        XCTAssertEqual(snapshot.canvas.width, Double(SheetPage.size.width))
+        XCTAssertEqual(snapshot.canvas.height, Double(SheetPage.size.height))
+    }
+
+    /// Sheets written before the page had a fixed size, on an iPad held in
+    /// landscape, have strokes past the portrait edge. Clamping them would flatten
+    /// that work onto the edge, so the page grows instead.
+    func testAStrokePastThePageGrowsTheExportedCanvas() throws {
+        let beyond = CGPoint(x: SheetPage.size.width + 300, y: 40)
+        let snapshot = DrawingSnapshot.fromPencilDrawing(
+            drawing(to: beyond),
+            canvasSize: SheetPage.size
+        )
+
+        XCTAssertGreaterThanOrEqual(snapshot.canvas.width, Double(beyond.x))
+        let furthest = snapshot.strokes.flatMap(\.points).map(\.x).max() ?? 0
+        XCTAssertGreaterThan(furthest, Double(SheetPage.size.width))
+    }
+
+    func testAPlainSheetSendsTheVersionItAlwaysDidAndNoRuling() throws {
+        let snapshot = DrawingSnapshot.fromPencilDrawing(
+            drawing(to: CGPoint(x: 100, y: 100)),
+            canvasSize: SheetPage.size
+        )
+
+        XCTAssertEqual(snapshot.schemaVersion, currentSchemaVersion)
+        XCTAssertNil(snapshot.canvas.ruling)
+
+        let encoded = try JSONEncoder().encode(snapshot)
+        let json = String(decoding: encoded, as: UTF8.self)
+        XCTAssertFalse(json.contains("ruling"), "a plain sheet should not mention ruling")
+    }
+
+    func testARuledSheetAsksForTheVersionThatCanCarryIt() throws {
+        let snapshot = DrawingSnapshot.fromPencilDrawing(
+            drawing(to: CGPoint(x: 100, y: 100)),
+            canvasSize: SheetPage.size,
+            ruling: SheetRuling(style: .lines)
+        )
+
+        XCTAssertEqual(snapshot.schemaVersion, ruledSchemaVersion)
+        XCTAssertEqual(snapshot.canvas.ruling?.style, .lines)
+        XCTAssertEqual(snapshot.canvas.ruling?.spacing, SheetRuling.defaultSpacing)
+    }
+
+    /// A host that predates ruling still gets the strokes. They are what matters;
+    /// the rules are the aid they were made against.
+    func testDroppingRulingFallsBackToTheVersionAnOlderHostTakes() throws {
+        let ruled = DrawingSnapshot.fromPencilDrawing(
+            drawing(to: CGPoint(x: 100, y: 100)),
+            canvasSize: SheetPage.size,
+            ruling: SheetRuling(style: .grid)
+        )
+
+        let plain = ruled.withoutRuling()
+
+        XCTAssertEqual(plain.schemaVersion, currentSchemaVersion)
+        XCTAssertNil(plain.canvas.ruling)
+        XCTAssertEqual(plain.strokes, ruled.strokes)
+    }
+}
