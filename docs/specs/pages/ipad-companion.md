@@ -52,8 +52,14 @@ Setup until paired, then a `NavigationStack` whose root is the register.
 ## Design tokens
 The Drawing Set tokens in [`DESIGN.md`](../../../DESIGN.md), carried in
 `DrawingSetStyle.swift`. The status dot is the one place colour alone still varies:
-`review` blue for idle and saved, `ink-label` for waiting and saving, `stamp` red
-for failed and wrong-host, always beside a written label, never on its own.
+`review` blue for idle and saved, `ink-label` for waiting and saving, and red for
+failed and wrong-host, always beside a written label, never on its own.
+
+That red is the one place the app spends a saturated colour outside the issue
+stamp, which `DESIGN.md` otherwise forbids. It predates the drawing-set direction
+and is a known breach rather than an exception the design grants: either the dot
+loses its colour or `DESIGN.md` gains a second sanctioned use. Recorded so it is
+decided rather than inherited.
 
 ## Tech used
 

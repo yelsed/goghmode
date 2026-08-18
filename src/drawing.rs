@@ -79,6 +79,9 @@ pub struct DrawingSnapshot {
 
 pub const CURRENT_SCHEMA_VERSION: u8 = 3;
 
+/// The version that may carry ruling. Named so the validator can say so.
+pub const RULED_SCHEMA_VERSION: u8 = 3;
+
 /// The page the desktop canvas owns. Without it the desktop app keeps
 /// overwriting whichever page the iPad sent last.
 ///

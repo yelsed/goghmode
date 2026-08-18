@@ -96,9 +96,9 @@ struct CanvasView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var drawing = PKDrawing()
     @State private var reloadSignal = 0
-    /// What the sheet's history was last told about. Compared rather than counted
-    /// from, so a stroke finishing is the only thing that records a state.
-    @State private var lastRecordedStrokeCount = 0
+    /// Waits for the writing to pause before recording a state, the same way the
+    /// upload does.
+    @State private var pendingRevision: Task<Void, Never>?
     @State private var renaming: RenameTarget?
     @State private var confirmingClear = false
     @State private var stamping = false
@@ -125,7 +125,7 @@ struct CanvasView: View {
                 ruling: page?.ruling
             ) { newDrawing in
                 store.update(pageID, with: newDrawing)
-                recordIfStrokesChanged(newDrawing)
+                recordRevisionAfterAPause(newDrawing)
                 uploader.schedule(snapshot: snapshot(of: newDrawing), to: destination)
             }
             .ignoresSafeArea(edges: .bottom)
@@ -192,20 +192,23 @@ struct CanvasView: View {
         }
         .onAppear {
             store.select(pageID)
-            let stored = page?.drawing ?? PKDrawing()
-            drawing = stored
-            lastRecordedStrokeCount = stored.strokes.count
+            drawing = page?.drawing ?? PKDrawing()
             reloadSignal += 1
         }
         // Leaving the sheet — back to the register, or the app being put away — is
         // when work is most likely to be lost: the app can be killed in the
         // background before the 600ms debounce fires.
         .onDisappear {
+            // The pause may never come: leaving is itself the pause.
+            pendingRevision?.cancel()
+            store.recordRevision(pageID, drawing)
             uploadCurrentSheet()
             store.flushRevisions()
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .background {
+                pendingRevision?.cancel()
+                store.recordRevision(pageID, drawing)
                 uploadCurrentSheet()
                 store.flushRevisions()
             }
@@ -275,14 +278,21 @@ struct CanvasView: View {
         )
     }
 
-    /// One state per finished stroke. PencilKit reports a drawing many times while
-    /// a stroke is being made, but a stroke only joins the drawing once it is
-    /// finished, so the count changing is the cheap signal for "something happened
-    /// worth coming back to".
-    private func recordIfStrokesChanged(_ newDrawing: PKDrawing) {
-        guard newDrawing.strokes.count != lastRecordedStrokeCount else { return }
-        lastRecordedStrokeCount = newDrawing.strokes.count
-        store.recordRevision(pageID, newDrawing)
+    /// One state per pause in the writing.
+    ///
+    /// This used to fire on the stroke count changing, which is cheap but blind to
+    /// every edit that leaves the count alone: dragging a lasso selection, or an
+    /// eraser shortening a stroke without splitting it. Those are exactly the
+    /// edits someone wants back. `PageStore.recordRevision` compares against the
+    /// state it already holds, so a pause that changed nothing still records
+    /// nothing.
+    private func recordRevisionAfterAPause(_ newDrawing: PKDrawing) {
+        pendingRevision?.cancel()
+        pendingRevision = Task {
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled else { return }
+            store.recordRevision(pageID, newDrawing)
+        }
     }
 
     private func stepBack() {
@@ -298,8 +308,10 @@ struct CanvasView: View {
     /// Sent to the host straight away rather than on the next pause: stepping back
     /// is a deliberate change to what the sheet says, and the agent reads the host.
     private func apply(_ restored: PKDrawing) {
+        // A pause recorded after a step back would land on the state just stepped
+        // to, which is already where the cursor sits.
+        pendingRevision?.cancel()
         drawing = restored
-        lastRecordedStrokeCount = restored.strokes.count
         reloadSignal += 1
         store.restore(pageID, to: restored)
         uploader.uploadNow(snapshot: snapshot(of: restored), to: destination)
@@ -314,9 +326,9 @@ struct CanvasView: View {
         // back rather than the thing the confirmation exists to prevent.
         store.recordRevision(pageID, drawing)
 
+        pendingRevision?.cancel()
         let emptied = PKDrawing()
         drawing = emptied
-        lastRecordedStrokeCount = 0
         reloadSignal += 1
         store.clear(pageID)
         store.recordRevision(pageID, emptied)

@@ -372,10 +372,16 @@ fn the_ipad_rules_a_sheet_in_the_same_ink_the_exporter_bakes_in() {
     )
     .expect("the companion's tokens should be readable from the repository root");
 
-    // #C9C4BB, which is `rule-hair` in DESIGN.md, written as SwiftUI components.
+    // #C9C4BB, which is `rule-hair` in DESIGN.md. The companion resolves its
+    // ruling ink from that token rather than retyping the triple, so the token is
+    // what has to match.
     assert!(
-        swift.contains("red: 0.788, green: 0.769, blue: 0.733"),
-        "Sheet.rulingInk no longer matches the exporter's RULING_INK"
+        swift.contains("ruleHair = dynamic(light: (0.788, 0.769, 0.733)"),
+        "Sheet.ruleHair no longer matches the exporter's RULING_INK"
+    );
+    assert!(
+        swift.contains("rulingInk = UIColor(Sheet.ruleHair)"),
+        "Sheet.rulingInk should stay derived from the rule-hair token"
     );
 
     let expected: [u8; 3] = [

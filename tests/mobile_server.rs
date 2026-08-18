@@ -719,3 +719,28 @@ fn ruled_snapshot_body(spacing: f32) -> String {
     }}"##
     )
 }
+
+/// Ruling is what version 3 exists to carry. A version 2 client sending it would
+/// otherwise get a ruled export while claiming a version that never promised one.
+#[test]
+fn ruling_on_an_older_schema_version_is_refused() {
+    let directory = tempfile::tempdir().unwrap();
+    let (_host_dir, host) = test_host();
+    let server =
+        MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
+
+    let body = r##"{
+        "schemaVersion": 2,
+        "page": { "id": "older-client" },
+        "canvas": {
+            "width": 32, "height": 24, "background": "#ffffff",
+            "ruling": { "style": "grid", "spacing": 32 }
+        },
+        "strokes": []
+    }"##;
+    let response = save_snapshot(&server, body);
+
+    assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
+    assert!(response.contains("needs schemaVersion 3"));
+    assert!(!directory.path().join("latest.json").exists());
+}

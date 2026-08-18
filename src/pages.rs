@@ -7,7 +7,7 @@ use crate::drawing::{CanvasSize, DrawingSnapshot, PageRef, Stroke, LEGACY_PAGE_I
 use crate::export::{write_artifacts, ExportedFiles};
 
 const PAGES_DIRECTORY: &str = "pages";
-const PAGE_STEM: &str = "page";
+pub const PAGE_STEM: &str = "page";
 const INDEX_FILE: &str = "index.json";
 const PINNED_FILE: &str = "pinned.json";
 const MAX_PAGE_ID_LENGTH: usize = 64;

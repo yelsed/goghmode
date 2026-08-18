@@ -46,9 +46,11 @@ drawn into the exported PNG and SVG under the ink.
 - DESIGN.md's blanket refusal is replaced by a narrower one: no ruling by default,
   and never outside the drawing area. The thing it was protecting against, texture
   as decoration, is still refused.
-- A third schema version is now in circulation. The companion asks the host what it
-  accepts and sends version 2 without ruling to a host that predates this, so an
-  un-updated Mac keeps receiving drawings.
+- A third schema version is now in circulation. The companion learns from the
+  refusal rather than asking first: a host that predates ruling has no route that
+  would have answered the question, and a paired host is never probed at all. So a
+  ruled sheet is sent, refused once, and re-sent without its ruling, and the drawing
+  still arrives. The cost is one wasted request per host, once.
 - The exported page and the sheet on the iPad now agree, which they did not have to
   before.
 - An agent reading a ruled page will see the rules and may describe them. That is

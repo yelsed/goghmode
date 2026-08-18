@@ -68,7 +68,7 @@ components:
     borderColor: "{colors.stamp}"
     typography: "{typography.stamp}"
     padding: "0 9px"
-    height: "30px"
+    height: "30px, scaled with the reading size"
   sheet-ruling:
     color: "{colors.rule-hair}"
     spacing: "32px"
@@ -169,7 +169,9 @@ content.
   register.
 - **Issued mark**: uppercase, letter-spaced, in stamp red, in the same box the
   `STAMP` button uses, so the `AGENT` column does not shift when a sheet is
-  stamped or lifted. It arrives with a short impact settle, which is where the
+  stamped or lifted. The box grows with the reading size along with its lettering:
+  a fixed box around type that scales is a box that clips the one word answering
+  what the agent reads. It arrives with a short impact settle, which is where the
   satisfaction of stamping lives. It is not rotated: a block set off-axis inside a
   table fights the column alignment the register depends on.
 - **Status chip**: connection state as a dot, a label, and the time of the last

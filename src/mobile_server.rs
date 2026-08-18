@@ -8,7 +8,9 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::crypto::sha256_hex;
-use crate::drawing::{DrawingSnapshot, MAX_RULING_SPACING, MIN_RULING_SPACING};
+use crate::drawing::{
+    DrawingSnapshot, MAX_RULING_SPACING, MIN_RULING_SPACING, RULED_SCHEMA_VERSION,
+};
 use crate::host::{unix_millis, Host, PairOutcome, PLATFORM};
 use crate::pages::{page_id_is_safe, write_page};
 use crate::protocol::{
@@ -961,6 +963,15 @@ fn validate_snapshot(snapshot: &DrawingSnapshot) -> Result<(), String> {
         return Err("canvas background colour is too long".to_owned());
     }
     if let Some(ruling) = snapshot.canvas.ruling {
+        // Ruling is what version 3 exists to carry. Accepting it from a client
+        // claiming an older version would quietly widen what those versions mean,
+        // and the point of a version is that it says what the payload may hold.
+        if snapshot.schema_version < RULED_SCHEMA_VERSION {
+            return Err(format!(
+                "canvas ruling needs schemaVersion {RULED_SCHEMA_VERSION}, not {}",
+                snapshot.schema_version
+            ));
+        }
         if !ruling.spacing.is_finite()
             || !(MIN_RULING_SPACING..=MAX_RULING_SPACING).contains(&ruling.spacing)
         {

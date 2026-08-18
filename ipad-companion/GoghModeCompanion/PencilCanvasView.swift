@@ -153,6 +153,11 @@ final class SheetView: UIView {
 /// The rules themselves. Drawn rather than tiled, because seventy-odd lines cost
 /// nothing and a tiled pattern would not stay pinned to the page under zoom.
 final class SheetRulingView: UIView {
+    /// In page units, matching `RULING_INK`'s companions in `src/export.rs`: the
+    /// exporter strokes a one-unit rule and fills a one-unit dot radius.
+    static let ruleWidth: CGFloat = 1
+    static let dotRadius: CGFloat = 1
+
     var ruling: SheetRuling? {
         didSet {
             guard ruling != oldValue else { return }
@@ -177,7 +182,11 @@ final class SheetRulingView: UIView {
 
         context.setFillColor(Sheet.rulingInk.cgColor)
         context.setStrokeColor(Sheet.rulingInk.cgColor)
-        context.setLineWidth(1)
+        // Everything here is a page measurement scaled to the screen, never a
+        // screen measurement. The exporter draws a one-unit rule on the page, so
+        // a fixed one-point rule here would be heavier than its own export at
+        // anything but 1:1, and the promise is that the two match.
+        context.setLineWidth(SheetRulingView.ruleWidth * scale)
 
         let down = stops(upTo: pageRect.height, every: spacing).map { pageRect.minY + $0 }
         let across = stops(upTo: pageRect.width, every: spacing).map { pageRect.minX + $0 }
@@ -195,7 +204,7 @@ final class SheetRulingView: UIView {
                 context.stroke(CGRect(x: x, y: pageRect.minY, width: 0, height: pageRect.height))
             }
         case .dots:
-            let radius = max(1, scale)
+            let radius = SheetRulingView.dotRadius * scale
             for y in down {
                 for x in across {
                     context.fillEllipse(

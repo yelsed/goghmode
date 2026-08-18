@@ -154,7 +154,7 @@ fn an_unreadable_stamp_is_treated_as_no_stamp() {
 
 #[test]
 fn a_sheet_stamped_moments_ago_reads_as_just_now() {
-    let now = 1_700_000_000_000_u64;
+    let now = 1_700_000_000_000_u128;
 
     assert_eq!(describe_age(now - 5_000, now), "just now");
     assert_eq!(describe_age(now - 59_000, now), "just now");
@@ -162,7 +162,7 @@ fn a_sheet_stamped_moments_ago_reads_as_just_now() {
 
 #[test]
 fn an_older_sheet_reads_in_minutes_hours_then_days() {
-    let now = 1_700_000_000_000_u64;
+    let now = 1_700_000_000_000_u128;
 
     assert_eq!(describe_age(now - 60_000, now), "1 minute ago");
     assert_eq!(describe_age(now - 3 * 60_000, now), "3 minutes ago");
@@ -176,7 +176,7 @@ fn an_older_sheet_reads_in_minutes_hours_then_days() {
 /// sheet as hundreds of millions of years old.
 #[test]
 fn a_stamp_from_the_future_reads_as_just_now() {
-    let now = 1_700_000_000_000_u64;
+    let now = 1_700_000_000_000_u128;
 
     assert_eq!(describe_age(now + 60_000, now), "just now");
 }

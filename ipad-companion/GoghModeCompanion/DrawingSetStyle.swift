@@ -67,10 +67,16 @@ enum Sheet {
     static let onGroundSecondary =
         dynamic(light: (0.361, 0.345, 0.318), dark: (0.678, 0.659, 0.627))
 
-    /// Ruling ink. Not a dynamic pair: the sheet is white in both appearances, and
-    /// this has to match the value the exporter bakes into the PNG exactly, or the
-    /// page on the iPad and the page the agent reads are two different pages.
-    static let rulingInk = UIColor(red: 0.788, green: 0.769, blue: 0.733, alpha: 1)
+    /// Ruling ink, which is `rule-hair` resolved light. Not a dynamic pair: the
+    /// sheet is white in both appearances, and this has to match the value the
+    /// exporter bakes into the PNG exactly, or the page on the iPad and the page
+    /// the agent reads are two different pages.
+    ///
+    /// Resolved from the token rather than retyped as its own triple, so there is
+    /// one place the colour lives. `tests/export_snapshot.rs` pins it to the
+    /// exporter's copy, which is the one link no module can make.
+    static let rulingInk = UIColor(Sheet.ruleHair)
+        .resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
 
     static let sheetRadius: CGFloat = 2
     static let controlRadius: CGFloat = 8
@@ -201,12 +207,7 @@ struct IssuedMark: View {
     var text = "Issued"
 
     var body: some View {
-        StampFace(
-            symbol: "seal.fill",
-            text: text,
-            tint: Sheet.stamp,
-            border: Sheet.stamp
-        )
+        StampFace(symbol: "seal.fill", text: text, tint: Sheet.stamp, border: Sheet.stamp)
         .accessibilityLabel(Text("\(text). This is the page your agent reads."))
     }
 }
@@ -216,8 +217,13 @@ struct IssuedMark: View {
 struct StampFace: View {
     let symbol: String
     let text: String
+    /// Lettering and edge are separate on purpose: the quiet button is `ink-label`
+    /// lettering inside a lighter `rule` edge, and only the stamped state spends
+    /// one colour on both.
     let tint: Color
     let border: Color
+
+    @ScaledMetric(relativeTo: .caption) private var boxHeight: CGFloat = 30
 
     var body: some View {
         HStack(spacing: 5) {
@@ -228,7 +234,10 @@ struct StampFace: View {
         .foregroundStyle(tint)
         .lineLimit(1)
         .padding(.horizontal, 9)
-        .frame(height: 30)
+        // Scaled, not fixed. A 30pt box around type that grows is a box that
+        // clips `ISSUED` at a larger reading size, and the one word answering
+        // "what does the agent read?" is the worst one to lose.
+        .frame(height: boxHeight)
         .overlay {
             Rectangle().strokeBorder(border, lineWidth: Sheet.hair)
         }

@@ -252,7 +252,7 @@ Documented rather than fixed. Each is a live item in [PLANNING.md](PLANNING.md).
 
 | Behaviour | Effect |
 | --- | --- |
-| Port 8787 taken → fallback to an ephemeral port | The token is stable, so a stale iPad URL still *looks* right while pointing at a dead port. No longer silent on the desktop: `port_warning()` (`src/app.rs:62`) is rendered in the toolbar. The tablet still sees only an `Offline` badge. |
+| Port 8787 taken by another program | ~~Falls back to an ephemeral port~~ **resolved.** Binding 8787 is the lock now: a host that cannot have it says so and serves nothing, rather than moving somewhere no saved address points at. See `StartOutcome` in `src/mobile_server.rs`. |
 | SVG background is hardcoded `#ffffff` | The web app's cream paper tone (`rgb(250, 249, 244)`) is dropped on export. |
 | Mobile service worker caches the app shell forever | A change to `mobile/index.html` does not reach an installed progressive web app until the cache name (`goghmode-mobile-v2`) is bumped. |
 
@@ -274,7 +274,7 @@ Documented rather than fixed. Each is a live item in [PLANNING.md](PLANNING.md).
 ## Testing
 
 ```bash
-cargo test                      # 32 Rust tests: 4 unit, 28 across 7 integration files
+cargo test                      # 140 Rust tests: 4 unit, 136 across 8 integration files
 ```
 
 | File | Covers |
@@ -285,10 +285,17 @@ cargo test                      # 32 Rust tests: 4 unit, 28 across 7 integration
 | `tests/app_install.rs` | Mach-O detection, bundle paths, launcher contents, plist keys. |
 | `tests/prompt.rs`, `tests/skill_install.rs` | Prompt/skill wording, both drawings locations, no shell metacharacters. |
 | `tests/app_mobile_url.rs` | Reads `src/app.rs` as text and asserts key UI symbols exist. A stand-in for GUI testing — brittle on purpose. |
+| `tests/copy_latest.rs` | `goghmode copy`: which sheet it reads, the page-id refusal, the age line, and the installed Raycast script. |
 
-Swift: `ipad-companion/GoghModeCompanionTests/DrawingSnapshotTests.swift` covers
-coordinate rounding, the rounding-before-clamping order, the JSON key shape against
-the Rust struct, and endpoint normalization. Run with `xcodebuild test`.
+Swift: `DrawingSnapshotTests.swift` covers coordinate rounding, the
+rounding-before-clamping order, the JSON key shape against the Rust struct, endpoint
+normalization, the page-sized canvas and the ruling versions. `PageStoreTests.swift`
+covers the wipe guard, deletion, and a sheet's history. Run with `xcodebuild test`.
+
+One test crosses the language boundary on purpose:
+`the_ipad_rules_a_sheet_in_the_same_ink_the_exporter_bakes_in` reads
+`DrawingSetStyle.swift` from the Rust suite, because the iPad and the exporter draw
+the same ruling twice and nothing else could notice them drifting.
 
 **Gap worth knowing:** there is no Rust CI. `cargo test` runs locally only; the
 single workflow builds and ships the iPad app.

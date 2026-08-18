@@ -3,12 +3,10 @@
 
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::pages::{page_dir, page_id_is_safe};
+use crate::pages::{page_dir, page_id_is_safe, PAGE_STEM};
 
 const LATEST_STEM: &str = "latest";
-const PAGE_STEM: &str = "page";
 
 pub struct SheetImage {
     pub width: usize,
@@ -40,17 +38,10 @@ pub fn sheet_json_path(image_path: &Path) -> PathBuf {
 /// When the sheet was last written, in unix milliseconds. A missing or
 /// unreadable stamp is `None` rather than an error: the image is what was asked
 /// for, and its age is the extra.
-pub fn read_updated_at(json_path: &Path) -> Option<u64> {
+pub fn read_updated_at(json_path: &Path) -> Option<u128> {
     let text = std::fs::read_to_string(json_path).ok()?;
     let stored: serde_json::Value = serde_json::from_str(&text).ok()?;
-    stored["updatedAt"].as_u64()
-}
-
-pub fn now_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|since_epoch| since_epoch.as_millis() as u64)
-        .unwrap_or(0)
+    stored["updatedAt"].as_u64().map(u128::from)
 }
 
 /// How old the sheet is, in words. Relative rather than a wall clock reading,
@@ -58,7 +49,7 @@ pub fn now_millis() -> u64 {
 ///
 /// A stamp from the future means two clocks disagree, not that a sheet is
 /// negatively old, so it reads as just now.
-pub fn describe_age(updated_at_millis: u64, now_millis: u64) -> String {
+pub fn describe_age(updated_at_millis: u128, now_millis: u128) -> String {
     let seconds = now_millis.saturating_sub(updated_at_millis) / 1000;
     let minutes = seconds / 60;
     let hours = minutes / 60;
@@ -74,7 +65,7 @@ pub fn describe_age(updated_at_millis: u64, now_millis: u64) -> String {
     }
 }
 
-fn ago(count: u64, unit: &str) -> String {
+fn ago(count: u128, unit: &str) -> String {
     let plural = if count == 1 { "" } else { "s" };
     format!("{count} {unit}{plural} ago")
 }

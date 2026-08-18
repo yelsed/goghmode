@@ -196,7 +196,12 @@ pub fn write_artifacts(
 /// `rule-hair` from DESIGN.md: visible enough to write against, faint enough to
 /// stay under the ink.
 const RULING_INK: Rgba<u8> = Rgba([201, 196, 187, 255]);
-const RULING_INK_HEX: &str = "#C9C4BB";
+
+/// Derived rather than written twice, so the SVG and the PNG cannot disagree.
+fn ruling_ink_hex() -> String {
+    let Rgba([red, green, blue, _]) = RULING_INK;
+    format!("#{red:02X}{green:02X}{blue:02X}")
+}
 
 /// Where the rules fall across one axis. The first rule is one space in, so the
 /// page does not start on a line sitting against its own edge.
@@ -239,7 +244,7 @@ fn push_ruling_svg(svg: &mut String, ruling: Ruling, width: f32, height: f32) {
                         "<circle cx=\"{}\" cy=\"{}\" r=\"1\" fill=\"{}\"/>\n",
                         svg_number(*x),
                         svg_number(*y),
-                        RULING_INK_HEX
+                        ruling_ink_hex()
                     ));
                 }
             }
@@ -254,7 +259,7 @@ fn push_ruling_line_svg(svg: &mut String, x1: f32, y1: f32, x2: f32, y2: f32) {
         svg_number(y1),
         svg_number(x2),
         svg_number(y2),
-        RULING_INK_HEX
+        ruling_ink_hex()
     ));
 }
 

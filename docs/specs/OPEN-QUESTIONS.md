@@ -34,8 +34,6 @@ Four of the five are answered; see **Resolved**. What remains:
       [ADR-0002](../decisions/0002-token-in-path-lan-pairing.md).
 - [ ] Should the desktop expose the server by default while the window is open, or
       require explicit opt-in each session?
-- [ ] Should the port fallback warn, or refuse and fail loudly? A QR code makes the
-      question mostly moot.
 
 ### Scope questions carried from the vision document
 - [ ] Are notebook and whiteboard separate modes, or one canvas with templates?
@@ -46,6 +44,10 @@ Four of the five are answered; see **Resolved**. What remains:
       needs none of that, which is why it shipped first.
 
 ## Resolved
+
+- [x] **Should the port fallback warn, or refuse and fail loudly?** → Refuse. The
+      ephemeral fallback is gone: binding 8787 is the lock, and a host that cannot
+      have it says so rather than moving somewhere no saved address points at.
 
 - [x] **Should `canvas.background` be honoured on export or removed from the
       schema?** → Kept, still ignored. Two shipped clients send it, and removing a

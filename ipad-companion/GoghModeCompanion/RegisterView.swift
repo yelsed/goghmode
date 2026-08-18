@@ -150,7 +150,10 @@ struct RegisterView: View {
         if uploader.hostIsKnown && !uploader.pinningSupported {
             return "\(UploadController.hostAppOutOfDate) Until then your agent reads whichever sheet you drew on last."
         }
-        return nil
+        // Silence here has to mean "nothing is wrong", so a sheet being sent
+        // without the ruling it was drawn against has to be sayable from here
+        // too, not only from the open sheet.
+        return uploader.rulingUnsupportedMessage
     }
 
     /// One ruled block of paper, hairline-separated, spanning the screen. A drawing
@@ -658,12 +661,7 @@ struct StampControl: View {
                 .foregroundStyle(Sheet.inkLabel)
                 .padding(.leading, 4)
         case .available:
-            StampFace(
-                symbol: "seal",
-                text: "Stamp",
-                tint: Sheet.inkLabel,
-                border: Sheet.rule
-            )
+            StampFace(symbol: "seal", text: "Stamp", tint: Sheet.inkLabel, border: Sheet.rule)
         }
     }
 

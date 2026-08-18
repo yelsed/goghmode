@@ -132,7 +132,7 @@ fn copy_sheet(drawings_dir: &Path, page_id: Option<&str>) -> anyhow::Result<()> 
     if let Some(updated_at) = clipboard::read_updated_at(&clipboard::sheet_json_path(&image_path)) {
         println!(
             "Saved {}.",
-            clipboard::describe_age(updated_at, clipboard::now_millis())
+            clipboard::describe_age(updated_at, host::unix_millis())
         );
     }
     Ok(())
