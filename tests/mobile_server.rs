@@ -674,3 +674,48 @@ fn a_sheet_can_be_pinned_before_the_mac_has_ever_received_it() {
         Some("not-yet-drawn")
     );
 }
+
+/// Ruling spacing is a number off the network that becomes geometry, so it is
+/// bounded like every other extent, and the refusal says which number was wrong.
+#[test]
+fn an_out_of_range_ruling_spacing_is_refused_with_a_reason_naming_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let (_host_dir, host) = test_host();
+    let server =
+        MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
+
+    let body = ruled_snapshot_body(2000.0);
+    let response = save_snapshot(&server, &body);
+
+    assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
+    assert!(response.contains("ruling spacing"));
+    assert!(!directory.path().join("latest.json").exists());
+}
+
+#[test]
+fn a_ruled_sheet_within_the_range_is_accepted() {
+    let directory = tempfile::tempdir().unwrap();
+    let (_host_dir, host) = test_host();
+    let server =
+        MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
+
+    let response = save_snapshot(&server, &ruled_snapshot_body(8.0));
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"));
+    let written = std::fs::read_to_string(directory.path().join("latest.json")).unwrap();
+    assert!(written.contains("\"ruling\""));
+}
+
+fn ruled_snapshot_body(spacing: f32) -> String {
+    format!(
+        r##"{{
+        "schemaVersion": 3,
+        "page": {{ "id": "ruled-sheet" }},
+        "canvas": {{
+            "width": 32, "height": 24, "background": "#ffffff",
+            "ruling": {{ "style": "grid", "spacing": {spacing} }}
+        }},
+        "strokes": []
+    }}"##
+    )
+}

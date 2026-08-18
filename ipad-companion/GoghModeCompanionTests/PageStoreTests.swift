@@ -281,6 +281,22 @@ final class SheetHistoryTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: sidecar.path))
     }
 
+    /// A store written before ruling existed has no such key. It has to read as a
+    /// plain sheet rather than failing to decode, or an update loses every page.
+    func testAStoreWrittenBeforeRulingStillReads() throws {
+        let written = Date().timeIntervalSince1970
+        let legacy = """
+        {"pages":[{"id":"kept","title":"Older sheet","createdAt":\(written),\
+        "updatedAt":\(written),"drawingData":""}],"series":[]}
+        """
+        try Data(legacy.utf8).write(to: storeURL)
+
+        let store = self.store()
+
+        XCTAssertEqual(store.page("kept")?.title, "Older sheet")
+        XCTAssertNil(store.page("kept")?.ruling, "a sheet from before ruling is plain")
+    }
+
     func testASheetIsPlainUntilARulingIsChosenAndThenRemembersIt() throws {
         let pageID: String
         do {
