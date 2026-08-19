@@ -66,21 +66,21 @@ decided rather than inherited.
 **PencilKit setup**: the canvas is a window onto a fixed sheet, not a drawing area
 the size of the view.
 
-- **The page is 1024 × 1366, portrait, always** (`SheetPage.size`). It used to be
-  whatever the view bounds were, so a sheet changed shape with the way the iPad was
-  held and the exported page changed with it.
-- **Zoom runs from fit to four times fit.** `SheetCanvasView.layoutSubviews`
-  recomputes the fit scale when the bounds change and only reassigns `zoomScale` if
-  the whole page was showing, so a rotation does not throw away someone's zoom.
-  `contentSize` follows the scale.
+- **The surface is the view.** A fixed 1024 × 1366 portrait page was tried and
+  reverted: it made the export one stable shape, but on a landscape iPad it left a
+  portrait sheet with dead space beside it, both white, so the surface appeared to
+  stop in the middle of the screen. `SheetPage.size` survives only as the stand-in
+  for sending a sheet from the register, where no view has measured it.
+- **Zoom runs from 1x to 4x.** The surface is the view at 1x and `contentSize`
+  grows from there, so there is something to zoom into and nothing to zoom out to.
 - **Ruling is drawn behind the canvas**, in `SheetRulingView`, with the canvas
   background clear. `PKCanvasViewDelegate` inherits `UIScrollViewDelegate`, so pan
   and zoom are reported and the rules stay pinned to the page rather than the
   screen. The ink matches the exporter's exactly, or the sheet on the iPad and the
   page the agent reads would be two different pages.
-- **A stroke past the page grows the exported canvas** rather than being clamped to
-  it, so sheets drawn in landscape before the page had a fixed size are still sent
-  whole.
+- **A stroke past the assumed page grows the exported canvas** rather than being
+  clamped to it, which is what carries a sheet sent from the register, where the
+  fallback size may be narrower than the surface it was drawn on.
 - No bounce, `contentInsetAdjustmentBehavior = .never`.
 
 - **Drawing policy is `.default`, not `.anyInput`** — a deliberate reversal of the

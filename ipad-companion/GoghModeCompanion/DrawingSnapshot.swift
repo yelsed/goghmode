@@ -23,11 +23,12 @@ let pagelessSchemaVersion = 1
 /// plain sheet never needs a host new enough to understand it.
 let ruledSchemaVersion = 3
 
-/// The sheet itself, in page units.
+/// The size to assume for a sheet whose canvas is not open.
 ///
-/// The drawing area used to be whatever the view bounds happened to be, so a sheet
-/// changed shape with the way the iPad was held and there was nothing to zoom into.
-/// A sheet is a sheet of paper: one size, portrait, the same on every device.
+/// The live surface is the view, so a sheet fills whatever it is drawn on. This is
+/// only the stand-in for sending a page from the register, where no view has
+/// measured it. `fromPencilDrawing` grows past it to cover whatever was drawn, so
+/// a sheet made on a wider surface is still sent whole.
 enum SheetPage {
     static let size = CGSize(width: 1024, height: 1366)
 }

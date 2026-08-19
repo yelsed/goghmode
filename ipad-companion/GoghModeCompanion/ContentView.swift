@@ -96,6 +96,9 @@ struct CanvasView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var drawing = PKDrawing()
     @State private var reloadSignal = 0
+    /// The live drawing surface, which is the view. Reported by the canvas rather
+    /// than assumed, so what is exported is what was drawn on.
+    @State private var canvasSize = SheetPage.size
     /// Waits for the writing to pause before recording a state, the same way the
     /// upload does.
     @State private var pendingRevision: Task<Void, Never>?
@@ -123,7 +126,8 @@ struct CanvasView: View {
                 drawing: $drawing,
                 reloadSignal: $reloadSignal,
                 ruling: page?.ruling
-            ) { newDrawing in
+            ) { newDrawing, surface in
+                canvasSize = surface == .zero ? canvasSize : surface
                 store.update(pageID, with: newDrawing)
                 recordRevisionAfterAPause(newDrawing)
                 uploader.schedule(snapshot: snapshot(of: newDrawing), to: destination)
@@ -272,7 +276,7 @@ struct CanvasView: View {
     private func snapshot(of pencilDrawing: PKDrawing) -> DrawingSnapshot {
         DrawingSnapshot.fromPencilDrawing(
             pencilDrawing,
-            canvasSize: SheetPage.size,
+            canvasSize: canvasSize,
             page: page?.pageRef,
             ruling: page?.ruling
         )
@@ -333,7 +337,7 @@ struct CanvasView: View {
         store.clear(pageID)
         store.recordRevision(pageID, emptied)
         uploader.uploadNow(
-            snapshot: DrawingSnapshot.empty(canvasSize: SheetPage.size, page: page?.pageRef),
+            snapshot: DrawingSnapshot.empty(canvasSize: canvasSize, page: page?.pageRef),
             to: destination
         )
     }

@@ -437,22 +437,24 @@ final class SheetPageAndRulingTests: XCTestCase {
         ])
     }
 
-    /// The sheet is a page, not the view it is shown in, so what is exported does
-    /// not change with the way the iPad is held.
-    func testASheetIsExportedAtPageSize() throws {
+    /// The sheet is the surface it was drawn on, so a wide one exports wide. A
+    /// fixed portrait page was tried and reverted: on a landscape iPad it left the
+    /// surface stopping in the middle of the screen.
+    func testASheetIsExportedAtTheSizeItWasDrawnOn() throws {
+        let landscape = CGSize(width: 1366, height: 1024)
         let snapshot = DrawingSnapshot.fromPencilDrawing(
             drawing(to: CGPoint(x: 100, y: 100)),
-            canvasSize: SheetPage.size
+            canvasSize: landscape
         )
 
-        XCTAssertEqual(snapshot.canvas.width, Double(SheetPage.size.width))
-        XCTAssertEqual(snapshot.canvas.height, Double(SheetPage.size.height))
+        XCTAssertEqual(snapshot.canvas.width, Double(landscape.width))
+        XCTAssertEqual(snapshot.canvas.height, Double(landscape.height))
     }
 
-    /// Sheets written before the page had a fixed size, on an iPad held in
-    /// landscape, have strokes past the portrait edge. Clamping them would flatten
-    /// that work onto the edge, so the page grows instead.
-    func testAStrokePastThePageGrowsTheExportedCanvas() throws {
+    /// A sheet sent from the register has no view to measure it, so it falls back
+    /// to `SheetPage.size`. A wide sheet would be clamped onto that edge, which is
+    /// how work drawn in landscape gets flattened, so the page grows instead.
+    func testAStrokePastTheFallbackPageGrowsTheExportedCanvas() throws {
         let beyond = CGPoint(x: SheetPage.size.width + 300, y: 40)
         let snapshot = DrawingSnapshot.fromPencilDrawing(
             drawing(to: beyond),
