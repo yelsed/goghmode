@@ -1,6 +1,6 @@
 # Export Contract
 
-> Source: `src/drawing.rs`, `src/export.rs` · Used on: [desktop-canvas](../pages/desktop-canvas.md), [mobile-web-canvas](../pages/mobile-web-canvas.md), [ipad-companion](../pages/ipad-companion.md) · Status: done
+> Source: `src/drawing.rs`, `src/export.rs` · Used on: [desktop-bridge](../pages/desktop-bridge.md), [mobile-web-canvas](../pages/mobile-web-canvas.md), [ipad-companion](../pages/ipad-companion.md) · Status: done
 
 ## Purpose
 The single definition of what a drawing *is* and what the Mac writes to disk. Every

@@ -1,8 +1,51 @@
 # Later
 
-Deferred work from the first round of iPad companion feedback (25 July 2026). These are product
-decisions rather than bugs, so they are parked until the capture-to-agent loop is boring and
-reliable.
+Deferred work, newest round first. These are product decisions rather than bugs, so they are parked
+rather than scheduled.
+
+## Round two, 19 August 2026
+
+From using build 19, the release that brought the flat stamp, swipe-to-delete, zoom, sheet history,
+ruling, and `goghmode copy`.
+
+### Waiting on a look, not on code
+
+- **The pressed stamp.** The plan asked for two forms, a rotated stamp kept for the open sheet and a
+  flat mark for the register. It shipped with one, flat, everywhere. The rotation was what read as
+  ugly inside an aligned column, but the open sheet has room for it and the pressed look is where
+  the satisfaction lived. Putting it back is small.
+- **The status dot spends stamp red.** `DESIGN.md` reserves that red for the issue stamp, and the
+  failed and wrong-host dot breaks it. Predates the drawing set direction. Either the dot loses its
+  colour or the rule gains a second sanctioned use, and it is a design call either way. Recorded in
+  [the iPad spec](docs/specs/pages/ipad-companion.md) rather than quietly inherited.
+- **Ruling could remember the last choice.** Every sheet starts plain, chosen deliberately. If grid
+  turns out to be what gets picked every time, defaulting a new sheet to the last ruling used is a
+  line of code.
+
+### The trade taken on 19 August
+
+The exported page changes shape when the iPad is rotated. That was given back on purpose when the
+fixed portrait page was reverted, because a surface that appeared to stop in the middle of the
+screen was the worse problem. It will be felt the first time a sheet drawn in landscape is reopened
+in portrait. If that becomes annoying, the third option from that decision is a sheet that remembers
+the shape it was first drawn at and keeps it for life.
+
+### Debt
+
+- `UploadController.refusedTheSchema` treats a bare 400 on a ruled sheet as a version refusal, which
+  is the only signal the older token route gives. No test covers it; the plan only ever listed it as
+  a device check.
+- Writing a sheet into the vault as a markdown note, rather than only putting it on the clipboard.
+  Needs a name, a folder, and an answer for what happens when the same sheet is sent twice. The
+  clipboard route needed none of those, which is why it shipped first.
+- The iPad test suite cannot be run on the current development machine. It wedges with no output;
+  the same suite runs green on CI in about three minutes. CI is the gate for now.
+
+## Round one, 25 July 2026
+
+Deferred from the first round of iPad companion feedback, parked until the capture-to-agent loop was
+boring and reliable. Most of this has since shipped; the headings are kept so the reasoning is not
+lost.
 
 The three items from that round that *were* bugs — no eraser, sticky `Offline` status, and unhelpful
 error text — are already fixed.

@@ -23,11 +23,13 @@ cloud, no public tunnel, no hosted backend.
 
 Status marker per feature: 🔵 planned · 🟡 in progress · 🟢 shipped.
 
-### 🟢 Desktop sketchpad (macOS)
-A native window with a paper-coloured canvas, a brush slider, and Undo / Clear.
-Every finished stroke autosaves to the drawings directory. Buttons copy the agent
-prompt, copy the drawing as an image, or copy the mobile URL.
-See [desktop-canvas](specs/pages/desktop-canvas.md).
+### 🟢 The desktop bridge (macOS, Linux)
+Not a drawing surface. It owns the drawings directory the agent reads, runs the local
+server the devices post to, and approves which devices may use it. Two views: the
+register of every sheet it holds, and the devices it is paired with. It stopped
+drawing in July 2026, because once the iPad is the good surface a second, worse one
+competing for the same directory is a liability.
+See [desktop-bridge](specs/pages/desktop-bridge.md).
 
 ### 🟢 Phone and tablet sketchpad in the browser
 The desktop app serves a small drawing web app over the local network — no install,

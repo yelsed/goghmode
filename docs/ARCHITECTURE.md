@@ -274,7 +274,7 @@ Documented rather than fixed. Each is a live item in [PLANNING.md](PLANNING.md).
 ## Testing
 
 ```bash
-cargo test                      # 140 Rust tests: 4 unit, 136 across 8 integration files
+cargo test                      # 140 Rust tests: 4 unit, 136 across 9 integration files
 ```
 
 | File | Covers |
