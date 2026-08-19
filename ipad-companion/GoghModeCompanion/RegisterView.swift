@@ -135,13 +135,9 @@ struct RegisterView: View {
     /// One line of plain language for whatever is currently wrong, most urgent
     /// first. Silence here has to mean "nothing is wrong", or the register lies.
     private var notice: String? {
-        // Ahead of `failed` on purpose: a machine that cannot prove it is the
-        // paired host must not be retried into, so its sentence outranks one that
-        // invites a retry.
-        if case .wrongHost(let message) = uploader.status {
-            return message
-        }
-        if case .failed(let message) = uploader.status {
+        // Read from `complaint`, not from `status`: a failure has to stay readable
+        // while the next save is already on its way, or the sentence flickers.
+        if let message = uploader.complaint {
             return message
         }
         if let message = uploader.pagesUnsupportedMessage {
