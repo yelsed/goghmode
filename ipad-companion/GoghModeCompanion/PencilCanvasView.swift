@@ -8,7 +8,7 @@ struct PencilCanvasView: UIViewRepresentable {
     @Binding var reloadSignal: Int
 
     var ruling: SheetRuling?
-    var onDrawingChanged: (PKDrawing) -> Void
+    var onDrawingChanged: (PKDrawing, CGSize) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -94,7 +94,7 @@ struct PencilCanvasView: UIViewRepresentable {
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
             guard !isLoading else { return }
             parent.drawing = canvasView.drawing
-            parent.onDrawingChanged(canvasView.drawing)
+            parent.onDrawingChanged(canvasView.drawing, canvasView.bounds.size)
         }
 
         /// `PKCanvasViewDelegate` inherits from `UIScrollViewDelegate`, so the pan
@@ -144,8 +144,8 @@ final class SheetView: UIView {
         ruling.pageRect = CGRect(
             x: -canvas.contentOffset.x,
             y: -canvas.contentOffset.y,
-            width: SheetPage.size.width * canvas.zoomScale,
-            height: SheetPage.size.height * canvas.zoomScale
+            width: canvas.bounds.width * canvas.zoomScale,
+            height: canvas.bounds.height * canvas.zoomScale
         )
     }
 }
@@ -176,7 +176,9 @@ final class SheetRulingView: UIView {
         guard let ruling, let context = UIGraphicsGetCurrentContext() else { return }
         guard pageRect.width > 0, pageRect.height > 0 else { return }
 
-        let scale = pageRect.width / SheetPage.size.width
+        // `pageRect` is the surface scaled by the zoom, and this view is the
+        // surface at 1x, so their ratio is the zoom.
+        let scale = pageRect.width / max(1, bounds.width)
         let spacing = ruling.spacing * scale
         guard spacing > 1 else { return }
 
@@ -228,50 +230,29 @@ final class SheetRulingView: UIView {
     }
 }
 
-/// A canvas whose content is a sheet of paper rather than the view it happens to
-/// be shown in.
+/// The drawing surface, which is the whole of the view it is given.
 ///
-/// Before this the drawing area was the view bounds, so a sheet changed shape with
-/// the way the iPad was held, the exported page did too, and there was nothing to
-/// zoom into. The page is now one fixed size and the view is a window onto it.
+/// A fixed portrait page was tried and reverted. It made the export one stable
+/// shape, but on a landscape iPad it left a portrait sheet with dead space beside
+/// it, indistinguishable from paper because both were white, and the surface
+/// appeared to stop in the middle of the screen. Filling the view is what the
+/// surface did before, and what a whiteboard should do.
+///
+/// Zoom still works: the page is the view at 1x and grows from there, so there is
+/// something to zoom into without there being something to zoom out to.
 final class SheetCanvasView: PKCanvasView {
-    /// How far past fitting the page the canvas will go. Four is enough to write
-    /// a word inside a diagram without it turning into a microscope.
+    /// Four is enough to write a word inside a diagram without it becoming a
+    /// microscope.
     private static let deepestZoom: CGFloat = 4
-
-    private var lastFittedBounds: CGRect = .zero
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        fitPageToBounds()
+        minimumZoomScale = 1
+        maximumZoomScale = SheetCanvasView.deepestZoom
         sizeContentToPage()
     }
 
     func sizeContentToPage() {
-        contentSize = CGSize(
-            width: SheetPage.size.width * zoomScale,
-            height: SheetPage.size.height * zoomScale
-        )
-    }
-
-    /// Recomputed only when the bounds actually change, because assigning
-    /// `zoomScale` lays out again and would otherwise never settle.
-    private func fitPageToBounds() {
-        guard bounds.width > 0, bounds.height > 0, bounds != lastFittedBounds else { return }
-        lastFittedBounds = bounds
-
-        // Someone who has zoomed in keeps their scale across a rotation. Someone
-        // looking at the whole page keeps seeing the whole page.
-        let wasShowingWholePage = zoomScale <= minimumZoomScale + 0.001
-
-        let fit = min(
-            bounds.width / SheetPage.size.width,
-            bounds.height / SheetPage.size.height
-        )
-        minimumZoomScale = fit
-        maximumZoomScale = fit * SheetCanvasView.deepestZoom
-        if wasShowingWholePage {
-            zoomScale = fit
-        }
+        contentSize = CGSize(width: bounds.width * zoomScale, height: bounds.height * zoomScale)
     }
 }
