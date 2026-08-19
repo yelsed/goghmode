@@ -111,7 +111,21 @@ struct CanvasView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        PencilCanvasView(
+            drawing: $drawing,
+            reloadSignal: $reloadSignal,
+            ruling: page?.ruling
+        ) { newDrawing, surface in
+            canvasSize = surface == .zero ? canvasSize : surface
+            store.update(pageID, with: newDrawing)
+            recordRevisionAfterAPause(newDrawing)
+            uploader.schedule(snapshot: snapshot(of: newDrawing), to: destination)
+        }
+        .ignoresSafeArea(edges: .bottom)
+        // Laid over the sheet, never stacked above it. A banner in the layout
+        // resizes the canvas the moment it appears, which moves the paper under
+        // the pen mid-line.
+        .overlay(alignment: .top) {
             if let notice {
                 Text(notice)
                     .font(.footnote)
@@ -120,19 +134,8 @@ struct CanvasView: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
                     .background(Sheet.ground)
+                    .allowsHitTesting(false)
             }
-
-            PencilCanvasView(
-                drawing: $drawing,
-                reloadSignal: $reloadSignal,
-                ruling: page?.ruling
-            ) { newDrawing, surface in
-                canvasSize = surface == .zero ? canvasSize : surface
-                store.update(pageID, with: newDrawing)
-                recordRevisionAfterAPause(newDrawing)
-                uploader.schedule(snapshot: snapshot(of: newDrawing), to: destination)
-            }
-            .ignoresSafeArea(edges: .bottom)
         }
         .background(Sheet.paper)
         .navigationTitle(page?.title ?? "Sheet")
@@ -242,13 +245,9 @@ struct CanvasView: View {
     /// first, in the same order the register uses. The status chip no longer
     /// carries these sentences, so this is where they are read.
     private var notice: String? {
-        if case .wrongHost(let message) = uploader.status {
-            return message
-        }
-        if case .failed(let message) = uploader.status {
-            return message
-        }
-        return uploader.pagesUnsupportedMessage ?? uploader.rulingUnsupportedMessage
+        uploader.complaint
+            ?? uploader.pagesUnsupportedMessage
+            ?? uploader.rulingUnsupportedMessage
     }
 
     /// Changing the ruling changes what the exported page looks like, so the host

@@ -47,6 +47,13 @@ final class UploadController: ObservableObject {
 
     @Published private(set) var status: Status = .idle
 
+    /// The last thing that actually went wrong, kept until something succeeds.
+    /// Reading the sentence off `status` instead made it blink out and back on
+    /// every stroke, because each save passes through `waiting` and `saving`
+    /// first — and on a sheet the banner sat in the layout, so the canvas moved
+    /// under the pen once per stroke.
+    @Published private(set) var complaint: String?
+
     /// False once a host has told us it predates pages. The page switcher hides
     /// itself rather than pretending a page switch means anything there.
     @Published private(set) var pagesSupported = true
@@ -215,6 +222,7 @@ final class UploadController: ObservableObject {
             }
         }
         if accepted {
+            complaint = nil
             status = .saved(Date())
         }
         return accepted
@@ -250,13 +258,22 @@ final class UploadController: ObservableObject {
     }
 
     private func record(_ error: Error) {
+        // A cancelled upload is the next stroke arriving, not a failure. URLSession
+        // reports it as `URLError.cancelled`, whose description is the bare word
+        // "cancelled" — which is what every stroke used to put on screen.
+        if error is CancellationError { return }
+        if let urlError = error as? URLError, urlError.code == .cancelled { return }
+
         if let uploadError = error as? UploadError, case .wrongHost(let name) = uploadError {
-            status = .wrongHost(
+            let message =
                 "The machine answering for \(name) could not prove it is that host. Nothing was sent."
-            )
+            complaint = message
+            status = .wrongHost(message)
             return
         }
-        status = .failed(guidance(for: error))
+        let message = guidance(for: error)
+        complaint = message
+        status = .failed(message)
     }
 
     /// One probe per address, cached.
@@ -329,6 +346,7 @@ final class UploadController: ObservableObject {
             capabilitiesByAddress.removeValue(forKey: destination.host.address)
             hostIsKnown = false
         }
+        complaint = nil
         status = .saved(Date())
     }
 

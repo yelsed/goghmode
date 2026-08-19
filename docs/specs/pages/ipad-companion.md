@@ -212,6 +212,18 @@ The status chip holds one shape in every state. Both its slots, the label and th
 time, are reserved at their widest, so the bar it sits in does not jump. Anything
 longer than a label belongs on the notice line.
 
+On an open sheet the notice line is drawn over the canvas, never stacked above it.
+A banner that takes layout space resizes the drawing surface the moment it appears,
+which moves the paper under the pen in the middle of a line.
+
+The sentence itself is read from `UploadController.complaint`, not from `status`.
+A complaint is set when something actually fails and cleared only when a save or a
+stamp succeeds, so it stays readable while the next attempt is already in flight.
+Derived from `status` it flickered once per stroke, because every save passes
+through `waiting` and `saving` before it can fail again. A cancelled upload is not
+a failure at all: cancelling the in-flight request is how the next stroke replaces
+the previous one, and `URLError.cancelled` is dropped rather than reported.
+
 ## Estimate
 Shipped. Only remaining work is listed.
 
