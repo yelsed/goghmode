@@ -25,7 +25,7 @@ Four of the five are answered; see **Resolved**. What remains:
       structurally just another source. It now writes `mac-scratch` and gained a page
       browser, a port warning, and a reveal-folder button; the quick sketch canvas
       stays. QR pairing is still Phase 2. Affects
-      [desktop-canvas](pages/desktop-canvas.md).
+      [desktop-bridge](pages/desktop-bridge.md).
 
 ### Network exposure and pairing
 - [ ] Should local-network access stay enabled by the secret URL alone, or should the
@@ -80,7 +80,7 @@ Four of the five are answered; see **Resolved**. What remains:
       iPad lists its own local pages; the Mac reads its own directory directly. No
       server-side listing was needed. Propagated to
       [ipad-companion](pages/ipad-companion.md) and
-      [desktop-canvas](pages/desktop-canvas.md).
+      [desktop-bridge](pages/desktop-bridge.md).
 - [x] **When `schemaVersion` goes to 2, does the Mac still accept version 1 uploads?**
       → Yes. The server accepts `{1, 2}` and files version 1 under a reserved `legacy`
       page. A bare bump would have bricked every installed companion build. A new
@@ -97,7 +97,7 @@ Four of the five are answered; see **Resolved**. What remains:
       Mac. QR remains Phase 2 — it is the fix that makes the stale-port trap
       irrelevant rather than merely visible. Propagated to
       [ipad-companion](pages/ipad-companion.md) and
-      [desktop-canvas](pages/desktop-canvas.md).
+      [desktop-bridge](pages/desktop-bridge.md).
 - [x] **Should clients send vector strokes, PNG snapshots, or both?** → Vector
       strokes. The Mac owns rendering, so strokes stay re-exportable. Propagated to
       [export-contract](components/export-contract.md); see

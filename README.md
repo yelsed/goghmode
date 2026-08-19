@@ -133,20 +133,20 @@ browser companion gets one page per browser.
 
 Pages are kept forever. Nothing deletes them on a timer.
 
-## Desktop controls
+## The desktop window
 
-- Draw directly on the paper canvas.
-- Release the mouse or trackpad to autosave.
-- `Save` writes the latest files immediately.
-- `Undo` removes the last stroke and saves.
-- `Clear` clears the canvas and saves.
-- `Copy image` copies the PNG to the system clipboard.
-- `Send to Claude` copies the prompt text for Claude or another AI terminal.
-- `Print prompt` writes the prompt to the terminal.
-- `Copy mobile URL` copies the local phone URL.
-- `Canvas` / `Pages` switches between drawing and browsing saved pages.
-- In `Pages`, click a page to point `drawings/latest.*` at it; `Reveal drawings
-  folder` opens the folder in Finder.
+The desktop app stopped being a drawing surface. It owns the drawings directory, runs the local
+server your devices post to, and shows you what it holds. Drawing happens on the iPad or the phone.
+
+- **Pages** is the home view: every sheet the host has received, newest first, with the stamped one
+  marked. Click a sheet to point `drawings/latest.*` at it.
+- **Devices** is where pairing lives: it shows a QR code to scan, asks you to approve each new
+  device, and lists what is paired, when each was last seen, and why any attempt was refused.
+- The connection chip carries the mobile URL for a phone or anything else that cannot pair.
+- `Reveal drawings folder` opens the directory in Finder.
+
+To put a sheet on the clipboard, use `goghmode copy` rather than the window; see
+[Copy a sheet to the clipboard](#copy-a-sheet-to-the-clipboard).
 
 ## Use with Claude Code
 
@@ -208,9 +208,14 @@ Quit any already-running GoghMode window, then reopen it.
 
 - **GoghMode does not appear in Spotlight:** run `goghmode install-app`, wait for Spotlight indexing, then search again.
 - **The app opens and closes immediately:** run `goghmode install-app` again so the bundled launcher and signed helper binary are refreshed.
-- **No drawing files exist yet:** draw one stroke or click `Save`.
+- **No drawing files exist yet:** draw one stroke on a paired device, or send a sheet from its register.
 - **`/goghmode` is unavailable:** run `goghmode install-skill --target claude`, then restart Claude Code.
-- **The phone cannot open the mobile URL:** keep GoghMode open, keep both devices on the same Wi-Fi, and use the exact URL from `Copy mobile URL`.
+- **The phone cannot open the mobile URL:** keep GoghMode open, keep both devices on the same Wi-Fi, and use the exact URL from the connection chip.
+- **The iPad says the desktop is an older version:** run `cargo install --path . --force` and
+  `goghmode install-app`, then reopen the app. Pages, stamping and ruling each need a host new
+  enough to understand them, and the iPad says which one is missing.
 - **`Send to desktop` fails:** keep the desktop app open and reload the phone page from the current mobile URL.
-- **Image paste does not work in an AI interface:** use `/goghmode`, `Send to Claude`, or `goghmode prompt --target claude`.
-- **The drawing is too thick or too thin:** adjust `Brush` before drawing.
+- **Image paste does not work in an AI interface:** use `/goghmode`, or `goghmode copy` to put the
+  sheet on the clipboard, or `goghmode prompt --target claude` for the prompt text.
+- **The drawing is too thick or too thin:** pick a thinner pen in the iPad tool picker, or adjust
+  `Brush` in the phone browser.

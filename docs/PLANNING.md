@@ -32,7 +32,7 @@ someone writing.
       would break every installed companion. See
       [export-contract](specs/components/export-contract.md).
 - [x] Update all three clients to send the new field:
-      [desktop-canvas](specs/pages/desktop-canvas.md),
+      [desktop-bridge](specs/pages/desktop-bridge.md),
       [mobile-web-canvas](specs/pages/mobile-web-canvas.md),
       [ipad-companion](specs/pages/ipad-companion.md).
 - [x] Mac writes page history **alongside an unchanged `latest.*`**, so `/goghmode`

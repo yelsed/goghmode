@@ -35,7 +35,7 @@ back via their **Used on** header. Small one-off bits stay inline on the page.
 ## Index
 
 ### Pages
-- [x] [desktop-canvas](pages/desktop-canvas.md) — the macOS window: draws, exports, and hosts the local server
+- [x] [desktop-bridge](pages/desktop-bridge.md): the desktop window, the register, pairing, and the local server
 - [x] [mobile-web-canvas](pages/mobile-web-canvas.md) — the browser sketchpad served to phones and tablets
 - [x] [ipad-companion](pages/ipad-companion.md) — the native PencilKit app and its upload behaviour
 

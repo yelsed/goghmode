@@ -71,8 +71,15 @@ tunnel. The Mac is the server, and it is on your desk.
 
 ## Brand Commitments
 
-The name GoghMode. No logo, wordmark, or palette has been committed — the current
-look is default SwiftUI chrome and carries no identity worth preserving.
+The name GoghMode, and the **drawing set** direction recorded in
+[`DESIGN.md`](DESIGN.md): pages are sheets in a numbered set, white paper on a warm
+grey ground, hairline rules, drafting lettering for field labels, SF Mono for sheet
+numbers only, and exactly one saturated colour, rubber-stamp red, spent on the issue
+stamp alone.
+
+That palette is normative and lives in code as `Sheet` in `DrawingSetStyle.swift` and
+`SET` in `src/app.rs`. There is no logo or wordmark, and no brand typeface: SF carries
+everything, per platform convention.
 
 ## Evidence on Hand
 
