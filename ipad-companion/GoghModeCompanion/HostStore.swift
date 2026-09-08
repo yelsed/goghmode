@@ -23,11 +23,46 @@ struct SavedHost: Codable, Equatable, Identifiable {
     var platform: String
     /// Scheme, address and port — no path, no secret. For a legacy host this is
     /// the full secret URL, because there the path *is* the credential.
+    ///
+    /// This is the address the companion *currently uses*: the first entry of
+    /// `addresses`. Reading it is what every existing caller does, so a move of
+    /// the host is an update of this field, never a new host.
     var address: String
+    /// Every address the host has offered, in the order it offered them. Kept
+    /// so that when the Wi-Fi changes and the active address stops answering,
+    /// there is somewhere else to try before asking for a re-pair.
+    var addresses: [String]
     var credential: HostCredential
 
     var isPaired: Bool {
         credential == .paired
+    }
+
+    /// The address the companion tries first, then the rest, deduped. That is
+    /// the order an upload is attempted in, and it is computed rather than
+    /// stored so the active address can never drift behind the list.
+    var allAddresses: [String] {
+        var seen = Set<String>()
+        return ([address] + addresses).filter { seen.insert($0).inserted }
+    }
+}
+
+extension SavedHost {
+    /// Data written before `addresses` existed carries only `address`. The set
+    /// is filled with exactly that, so a host saved by an older build behaves
+    /// exactly as it did before the field existed.
+    ///
+    /// Deliberately an extension: an `init(from:)` declared inside the struct
+    /// body would suppress the memberwise initialiser, and every place that
+    /// constructs a host relies on that one.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        platform = try container.decode(String.self, forKey: .platform)
+        address = try container.decode(String.self, forKey: .address)
+        addresses = (try? container.decode([String].self, forKey: .addresses)) ?? [address]
+        credential = try container.decode(HostCredential.self, forKey: .credential)
     }
 }
 
@@ -71,6 +106,12 @@ final class HostStore: ObservableObject {
         if let secret {
             Keychain.store(secret: secret, for: host.id)
         }
+        var host = host
+        // A payload that offered no set still yields one: the active address is
+        // never lost, which is the invariant every code path assumes.
+        if host.addresses.isEmpty {
+            host.addresses = [host.address]
+        }
         hosts.removeAll { $0.id == host.id }
         hosts.append(host)
         selectedHostID = host.id
@@ -94,9 +135,16 @@ final class HostStore: ObservableObject {
 
     /// A host that moved keeps its identity, so this is an update rather than a
     /// new host — which is the whole reason identity is not the address.
+    ///
+    /// The address that answered becomes active and moves to the front of the
+    /// offered set, so the next move has this one to fall back on.
     func updateAddress(_ address: String, for hostID: String) {
         guard let index = hosts.firstIndex(where: { $0.id == hostID }) else { return }
         hosts[index].address = address
+        if let position = hosts[index].addresses.firstIndex(of: address) {
+            hosts[index].addresses.remove(at: position)
+        }
+        hosts[index].addresses.insert(address, at: 0)
         save()
     }
 
@@ -115,6 +163,7 @@ final class HostStore: ObservableObject {
                 name: "Desktop",
                 platform: "unknown",
                 address: trimmed,
+                addresses: [trimmed],
                 credential: .legacyURL(trimmed)
             ),
             secret: nil

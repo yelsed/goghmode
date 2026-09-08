@@ -1,5 +1,6 @@
 import PencilKit
 import SwiftUI
+import UIKit
 
 /// The register is home. A sheet is somewhere you go and come back from, which is
 /// why the canvas is pushed rather than presented: the back button is the only
@@ -7,11 +8,21 @@ import SwiftUI
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("goghModeEndpoint") private var endpointText = ""
-    @StateObject private var uploader = UploadController()
+    @AppStorage("goghModeKeepAwake") private var keepAwake = true
+    @StateObject private var uploader: UploadController
     @StateObject private var pageStore = PageStore()
-    @StateObject private var hostStore = HostStore()
+    @StateObject private var hostStore: HostStore
     @State private var openPageID: String?
     @State private var showingSettings = false
+
+    init() {
+        // The uploader has to be able to write the address that actually
+        // answered back into the store, so the two are born together: one
+        // store, two owners, no copies that can fall out of step.
+        let store = HostStore()
+        _uploader = StateObject(wrappedValue: UploadController(hostStore: store))
+        _hostStore = StateObject(wrappedValue: store)
+    }
 
     /// The register's column widths are derived from one scaled unit, injected here
     /// so every screen in the stack measures its table the same way.
@@ -44,6 +55,7 @@ struct ContentView: View {
             // host list, so updating the app does not look like losing the
             // connection.
             hostStore.adoptLegacyEndpoint(endpointText)
+            applyKeepAwake()
         }
         .onChange(of: scenePhase) { _, newPhase in
             // Coming back to the app is the moment the host is most likely to
@@ -53,6 +65,7 @@ struct ContentView: View {
                 uploader.forgetWhatTheHostAccepts()
                 uploader.retryIfOffline()
             }
+            applyKeepAwake()
         }
         .onChange(of: hostStore.selectedHostID) { _, _ in
             uploader.forgetWhatTheHostAccepts()
@@ -64,6 +77,7 @@ struct ContentView: View {
             RegisterView(
                 store: pageStore,
                 uploader: uploader,
+                hostStore: hostStore,
                 destination: destination,
                 onOpen: { openPageID = $0 },
                 onNew: { openPageID = pageStore.addPage().id },
@@ -73,6 +87,7 @@ struct ContentView: View {
                 CanvasView(
                     store: pageStore,
                     uploader: uploader,
+                    hostStore: hostStore,
                     pageID: pageID,
                     destination: destination
                 )
@@ -82,6 +97,13 @@ struct ContentView: View {
             HostListView(hostStore: hostStore)
         }
     }
+
+    /// The idle timer only answers to us while the scene is active: the OS
+    /// re-arms it the moment we background, so we re-decide on every phase
+    /// change rather than holding onto a flag it has already ignored.
+    private func applyKeepAwake() {
+        UIApplication.shared.isIdleTimerDisabled = keepAwake && scenePhase == .active
+    }
 }
 
 /// One sheet, open. Everything here is about the drawing: the register's facts stay
@@ -89,11 +111,13 @@ struct ContentView: View {
 struct CanvasView: View {
     @ObservedObject var store: PageStore
     @ObservedObject var uploader: UploadController
+    @ObservedObject var hostStore: HostStore
 
     let pageID: String
     let destination: UploadController.Destination
 
     @Environment(\.scenePhase) private var scenePhase
+    @AppStorage("goghModeKeepAwake") private var keepAwake = true
     @State private var drawing = PKDrawing()
     @State private var reloadSignal = 0
     /// The live drawing surface, which is the view. Reported by the canvas rather
@@ -105,6 +129,7 @@ struct CanvasView: View {
     @State private var renaming: RenameTarget?
     @State private var confirmingClear = false
     @State private var stamping = false
+    @State private var showingRePair = false
 
     private var page: NotebookPage? {
         store.page(pageID)
@@ -149,6 +174,8 @@ struct CanvasView: View {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 StatusBadge(status: uploader.status, canRetry: uploader.canRetry) {
                     uploader.retry()
+                } onRePair: {
+                    showingRePair = true
                 }
 
                 if let page {
@@ -219,11 +246,17 @@ struct CanvasView: View {
                 uploadCurrentSheet()
                 store.flushRevisions()
             }
+            applyKeepAwake()
         }
         .sheet(item: $renaming) { target in
             RenameSheet(target: target) { _, name in
                 commitRename(to: name)
             }
+        }
+        // The repair for a host that has outlived its saved address: pair it
+        // again, the same way it was added.
+        .sheet(isPresented: $showingRePair) {
+            PairingView(hostStore: hostStore)
         }
         // Clearing a sheet cannot be undone, so it asks. The eraser used to wipe
         // every stroke on the first press with no way back.
@@ -368,6 +401,12 @@ struct CanvasView: View {
             }
         }
     }
+
+    /// Same contract as the register's: the idle timer is ours to hold only
+    /// while the sheet is in front of the user.
+    private func applyKeepAwake() {
+        UIApplication.shared.isIdleTimerDisabled = keepAwake && scenePhase == .active
+    }
 }
 
 /// Connection state as a chip that keeps one shape in every state.
@@ -380,13 +419,34 @@ struct StatusBadge: View {
     let status: UploadController.Status
     let canRetry: Bool
     let onRetry: () -> Void
+    /// The repair for `.needsRepair`: present the pairing screen, because a
+    /// dead address is past retry.
+    let onRePair: (() -> Void)?
+
+    init(
+        status: UploadController.Status,
+        canRetry: Bool,
+        onRetry: @escaping () -> Void,
+        onRePair: (() -> Void)? = nil
+    ) {
+        self.status = status
+        self.canRetry = canRetry
+        self.onRetry = onRetry
+        self.onRePair = onRePair
+    }
 
     /// The longest label any state can produce. Held here so the reservation and
     /// `Status.label` cannot drift apart unnoticed.
     private static let widestLabel = "Wrong host"
 
     var body: some View {
-        Button(action: onRetry) {
+        Button(action: {
+            if case .needsRepair = status {
+                onRePair?()
+            } else {
+                onRetry()
+            }
+        }) {
             HStack(spacing: 7) {
                 Circle()
                     .fill(tint)
@@ -394,13 +454,14 @@ struct StatusBadge: View {
 
                 label
                 savedTime
+                repairTarget
             }
             .padding(.horizontal, 8)
             .frame(height: 44)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(!canRetry)
+        .disabled(!canRetry && onRePair == nil)
         // The stamp control beside this one animates on a spring. Without this the
         // badge's own relayout gets dragged along by it.
         .animation(nil, value: status)
@@ -436,6 +497,18 @@ struct StatusBadge: View {
             }
     }
 
+    /// Filled only when a paired host's whole address set went silent. Naming the
+    /// machine tells you which one to re-pair, because the list can hold several.
+    @ViewBuilder
+    private var repairTarget: some View {
+        if case .needsRepair(let name) = status {
+            Text(name)
+                .font(.caption)
+                .foregroundStyle(Sheet.onGroundSecondary)
+                .lineLimit(1)
+        }
+    }
+
     private func badgeText(_ text: String) -> some View {
         Text(text)
             .font(.caption2.weight(.semibold))
@@ -454,7 +527,7 @@ struct StatusBadge: View {
         switch status {
         case .idle, .saved: Sheet.review
         case .waiting, .saving: Sheet.inkLabel
-        case .failed, .wrongHost: Sheet.stamp
+        case .failed, .wrongHost, .needsRepair: Sheet.stamp
         }
     }
 }

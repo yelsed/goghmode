@@ -361,6 +361,7 @@ final class DrawingSnapshotTests: XCTestCase {
                 name: "Desktop",
                 platform: "unknown",
                 address: address,
+                addresses: [address],
                 credential: .legacyURL(address)
             ),
             secret: nil,

@@ -106,12 +106,17 @@ the threat model, the protocol, and the ordered sub-phases.
 - [ ] ~~Sending one page to several named hosts~~ — **decided against.** Selecting a
       host and sending twice is impossible to get wrong, and a blanket destination
       is the ambiguity this whole phase exists to remove.
-- [ ] Offer every local address in the pairing code, not only the one the host
-      guesses. A machine on a virtual private network still needs the right
-      interface picked by hand. The field is already a list.
-- [ ] ~~Service discovery over multicast DNS~~ — **decided against** for now: it adds
-      a service advertisement on every network the host joins, to save re-entering
-      an address that pairing already carries.
+- [x] Offer the LAN address plus the host's own `.local` name in the pairing
+      payload. The companion tries the address first, falls back to the name, and
+      records whichever answered, so a Wi-Fi move is a fallback before it is a
+      re-pair. What stays open: every interface of a machine, because on a
+      virtual private network the right one still has to be picked by hand.
+- [ ] ~~Service discovery over multicast DNS~~ — **decided against**: it adds a
+      service advertisement on every network the host joins, to save re-pairing —
+      and re-pairing now costs one scan, because pairing carries the `.local`
+      name, the companion falls back across the carried addresses, and it names
+      the repair ("re-pair") when they all die instead of pretending a retry will
+      help.
 
 ### Later / unscheduled
 - [ ] Photo and snapshot import, so a phone photo of a paper page enters the same

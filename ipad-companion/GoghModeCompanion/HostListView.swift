@@ -7,6 +7,7 @@ struct HostListView: View {
     @ObservedObject var hostStore: HostStore
     @Environment(\.dismiss) private var dismiss
     @State private var showingPairing = false
+    @AppStorage("goghModeKeepAwake") private var keepAwake = true
 
     var body: some View {
         NavigationStack {
@@ -43,6 +44,13 @@ struct HostListView: View {
                     for index in offsets {
                         hostStore.remove(hostStore.hosts[index].id)
                     }
+                }
+
+                Section {
+                    // The same key the canvas watches, so the two always agree.
+                    Toggle("Keep screen awake", isOn: $keepAwake)
+                } footer: {
+                    Text("Only while the app is in the foreground.")
                 }
             }
             .navigationTitle("Hosts")

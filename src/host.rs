@@ -103,8 +103,11 @@ impl Registry {
 
 /// What the companion needs in order to pair, as it appears in the QR code.
 ///
-/// `addresses` is plural on purpose. Only one entry is filled in today, but a
-/// host with several interfaces should offer all of them, and widening a list
+/// `addresses` is plural on purpose. Today it holds the IP the host believes
+/// it is reachable on and, when the machine's hostname is URL-safe, the same
+/// machine's `.local` name — so a companion that follows the Wi-Fi onto a
+/// network with a different address plan still has somewhere to try. A host
+/// with several interfaces should offer all of them, and widening a list
 /// later is not a wire change whereas turning a string into a list would be.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PairingPayload {
@@ -490,13 +493,50 @@ fn sanitise_display_name(raw: &str) -> String {
 
 /// `hostname` exists on both target platforms. There is no standard-library
 /// call for this, and pulling in a crate for one string is not worth it.
-fn system_hostname() -> String {
-    let name = Command::new("hostname")
+fn raw_system_hostname() -> String {
+    Command::new("hostname")
         .output()
         .ok()
         .and_then(|output| String::from_utf8(output.stdout).ok())
-        .unwrap_or_default();
-    sanitise_display_name(name.trim().trim_end_matches(".local"))
+        .unwrap_or_default()
+        .trim()
+        .to_owned()
+}
+
+fn system_hostname() -> String {
+    sanitise_display_name(raw_system_hostname().trim_end_matches(".local"))
+}
+
+/// The machine's mDNS name, as it should be written into a pairing payload:
+/// the raw `hostname` output with `.local` made explicit.
+///
+/// Carrying the name in the payload is not discovery: nothing here queries
+/// mDNS, and the companion resolves the name itself, so ADR-0004's ban on an
+/// mDNS crate stays intact. The name is only useful to a companion that can
+/// resolve it (one on the same Wi-Fi, where `.local` answers), and it is
+/// never the first entry in the list — the IP the host measured stays first.
+pub(crate) fn mdns_host_name() -> Option<String> {
+    normalise_mdns_name(&raw_system_hostname())
+}
+
+/// The pure half of [`mdns_host_name`], split out so a test can exercise it
+/// without running `hostname`.
+fn normalise_mdns_name(raw: &str) -> Option<String> {
+    if raw.is_empty() {
+        return None;
+    }
+    let full = if raw.ends_with(".local") {
+        raw.to_owned()
+    } else {
+        format!("{raw}.local")
+    };
+    // A name that cannot sit in a URL (spaces, apostrophes) is skipped rather
+    // than escaped: a URL host has no escaping, and inventing one is out of
+    // scope. Skipping costs nothing — the IP entry remains, which is what
+    // pairing always did.
+    full.bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        .then_some(full)
 }
 
 fn write_owner_only(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
@@ -517,4 +557,41 @@ pub fn unix_millis() -> u128 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mdns_name_appends_local_when_absent() {
+        assert_eq!(
+            normalise_mdns_name("Yelses-MacBook").as_deref(),
+            Some("Yelses-MacBook.local")
+        );
+    }
+
+    #[test]
+    fn mdns_name_keeps_local_when_present() {
+        assert_eq!(normalise_mdns_name("Studio.local").as_deref(), Some("Studio.local"));
+    }
+
+    #[test]
+    fn mdns_name_accepts_dots_underscores_and_hyphens() {
+        assert_eq!(
+            normalise_mdns_name("Mac-Book_Pro.v2").as_deref(),
+            Some("Mac-Book_Pro.v2.local")
+        );
+    }
+
+    #[test]
+    fn mdns_name_skips_names_that_cannot_go_in_a_url() {
+        assert_eq!(normalise_mdns_name("Mac Book").as_deref(), None);
+        assert_eq!(normalise_mdns_name("Mac's Book").as_deref(), None);
+    }
+
+    #[test]
+    fn mdns_name_skips_a_missing_hostname() {
+        assert_eq!(normalise_mdns_name("").as_deref(), None);
+    }
 }

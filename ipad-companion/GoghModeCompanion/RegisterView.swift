@@ -9,6 +9,7 @@ import UniformTypeIdentifiers
 struct RegisterView: View {
     @ObservedObject var store: PageStore
     @ObservedObject var uploader: UploadController
+    @ObservedObject var hostStore: HostStore
 
     let destination: UploadController.Destination
     let onOpen: (String) -> Void
@@ -23,6 +24,7 @@ struct RegisterView: View {
     /// The sheet waiting on an answer to "delete this?". Deleting is the one
     /// action here with nothing behind it, so it is the one that asks.
     @State private var deleting: NotebookPage?
+    @State private var showingRePair = false
 
     /// Read through the preview cache rather than `page.isEmpty`, which would decode
     /// every stored drawing again on every rebuild.
@@ -81,6 +83,11 @@ struct RegisterView: View {
             RenameSheet(target: target, onSave: commitRename)
         }
         .deleteSheetDialog(sheet: $deleting) { store.delete($0.id) }
+        // The repair for a host that has outlived its saved address: pair it
+        // again, the same way it was added.
+        .sheet(isPresented: $showingRePair) {
+            PairingView(hostStore: hostStore)
+        }
     }
 
     /// The line that answers "what is the agent reading?" without opening anything,
@@ -107,6 +114,8 @@ struct RegisterView: View {
 
                 StatusBadge(status: uploader.status, canRetry: uploader.canRetry) {
                     uploader.retry()
+                } onRePair: {
+                    showingRePair = true
                 }
 
                 Text("\(store.pages.count) sheets")
@@ -135,6 +144,9 @@ struct RegisterView: View {
     /// One line of plain language for whatever is currently wrong, most urgent
     /// first. Silence here has to mean "nothing is wrong", or the register lies.
     private var notice: String? {
+        if case .needsRepair(let name) = uploader.status {
+            return "\(name) no longer answers at its saved address. The Wi-Fi may have moved — tap the badge to pair it again."
+        }
         // Read from `complaint`, not from `status`: a failure has to stay readable
         // while the next save is already on its way, or the sentence flickers.
         if let message = uploader.complaint {

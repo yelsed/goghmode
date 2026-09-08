@@ -169,6 +169,19 @@ impl MobileServer {
             .unwrap_or_else(|| self.url.clone())
     }
 
+    /// The same base URL as [`Self::base_url`], named by `host` instead of by
+    /// the LAN IP the host currently has. The shape mirrors
+    /// [`Self::base_url`] exactly — no brackets, no trailing route — so a
+    /// companion that already handles one base URL handles the other without
+    /// changing a line.
+    ///
+    /// The port comes from the listener the server actually holds rather than
+    /// from a parsed URL, so a test server bound to port 0 lands in the right
+    /// place too.
+    pub fn base_url_on(&self, host: &str) -> String {
+        format!("http://{host}:{}", self.local_addr.port())
+    }
+
     fn start_with_token(
         bind_ip: Ipv4Addr,
         port: u16,

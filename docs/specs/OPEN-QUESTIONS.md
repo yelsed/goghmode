@@ -118,3 +118,13 @@ Four of the five are answered; see **Resolved**. What remains:
       can push an edge point outside the canvas and earn a 400 from
       `validate_snapshot`. Locked in by a Swift test; propagated to
       [ipad-companion](pages/ipad-companion.md).
+- [x] **Should the companion browse for a host after a network change, instead of
+      asking for a re-pair?** → Not for now. Pairing carries the host's `.local`
+      name as a second address, the companion falls back across the carried
+      addresses and records which one answered, and when they all die it presents
+      a re-pair — one scan, because the identity, not the address, was paired.
+      Multicast discovery would advertise a service on every network the host
+      joins to save that one scan. Propagated to
+      [ipad-companion](pages/ipad-companion.md), Phase 5 of
+      [PLANNING.md](../../PLANNING.md), and noted in
+      [ADR-0004](../decisions/0004-no-http-framework.md).

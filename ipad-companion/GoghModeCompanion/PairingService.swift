@@ -110,6 +110,9 @@ enum PairingService {
                 name: payload.name,
                 platform: payload.platform,
                 address: address,
+                // Everything the host offered, kept for the next time the Wi-Fi
+                // moves and this one stops answering.
+                addresses: payload.addresses,
                 credential: .paired
             )
             let secret = GoghModeCrypto.deriveDeviceSecret(

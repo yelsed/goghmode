@@ -13,6 +13,10 @@ final class UploadController: ObservableObject {
         /// apart from `failed` because "offline" invites a retry and this must
         /// not be retried into.
         case wrongHost(String)
+        /// Every address the paired host offered failed to answer: the Wi-Fi
+        /// moved and the address with it. A retry cannot fix it — only a fresh
+        /// pairing can — so this is offered as a repair, not a retry.
+        case needsRepair(String)
 
         var label: String {
             switch self {
@@ -28,6 +32,8 @@ final class UploadController: ObservableObject {
                 "Offline"
             case .wrongHost:
                 "Wrong host"
+            case .needsRepair:
+                "Re-pair"
             }
         }
     }
@@ -71,6 +77,10 @@ final class UploadController: ObservableObject {
     @Published private(set) var hostIsKnown = false
 
     private let client: GoghModeClient
+    /// The store a paired host lives in, held so an upload that lands on a
+    /// fallback address can record which one. `nil` where no store is
+    /// reachable (tests).
+    private let hostStore: HostStore?
     private var pendingUpload: Task<Void, Never>?
     private var lastSnapshot: DrawingSnapshot?
     private var lastDestination: Destination?
@@ -104,8 +114,9 @@ final class UploadController: ObservableObject {
         return false
     }
 
-    init(client: GoghModeClient = GoghModeClient()) {
+    init(client: GoghModeClient = GoghModeClient(), hostStore: HostStore? = nil) {
         self.client = client
+        self.hostStore = hostStore
     }
 
     func schedule(snapshot: DrawingSnapshot, to destination: Destination) {
@@ -320,21 +331,33 @@ final class UploadController: ObservableObject {
 
         status = .saving
         do {
-            try await deliver(outgoing, to: destination)
-        } catch let error as URLError where error.isWorthRetrying {
-            // URLSession can hand back a pooled socket the host already closed,
-            // which surfaces as `networkConnectionLost` even though the host is
-            // reachable. One retry separates a dead socket from a dead server.
-            try await Task.sleep(for: .milliseconds(300))
-            try await deliver(outgoing, to: destination)
-        } catch let error as UploadError where refusedTheSchema(error, carrying: outgoing) {
-            // Learned from the refusal rather than probed for: a host that
-            // predates ruling has no route that would have answered the question,
-            // and the drawing still has to arrive.
-            addressesThatRefusedRuling.insert(destination.host.address)
-            rulingSupported = false
-            outgoing = outgoing.withoutRuling()
-            try await deliver(outgoing, to: destination)
+            do {
+                try await deliver(outgoing, to: destination)
+            } catch let error as URLError where error.isWorthRetrying {
+                // URLSession can hand back a pooled socket the host already closed,
+                // which surfaces as `networkConnectionLost` even though the host is
+                // reachable. One retry separates a dead socket from a dead server.
+                try await Task.sleep(for: .milliseconds(300))
+                try await deliver(outgoing, to: destination)
+            } catch let error as UploadError where refusedTheSchema(error, carrying: outgoing) {
+                // Learned from the refusal rather than probed for: a host that
+                // predates ruling has no route that would have answered the question,
+                // and the drawing still has to arrive.
+                addressesThatRefusedRuling.insert(destination.host.address)
+                rulingSupported = false
+                outgoing = outgoing.withoutRuling()
+                try await deliver(outgoing, to: destination)
+            }
+        } catch {
+            // A paired host whose every offered address failed to answer is past
+            // retry: the Wi-Fi moved and the address with it, and the repair is
+            // a fresh pairing. A host that answered but rejected is a different
+            // problem, and keeps the old path.
+            if destination.isPaired, error is URLError {
+                status = .needsRepair(destination.host.name)
+                return
+            }
+            throw error
         }
 
         // A save that lands is the strongest evidence there is: the host is
@@ -368,18 +391,54 @@ final class UploadController: ObservableObject {
 
     private func deliver(_ snapshot: DrawingSnapshot, to destination: Destination) async throws {
         if destination.isPaired {
-            try await client.upload(
-                snapshot,
-                to: destination.host,
-                secret: destination.secret ?? "",
-                deviceID: destination.deviceID
-            )
-            return
+            // The active address first, then the rest the host offered when it
+            // paired. A hop to the next address happens only for network-level
+            // failures — an address that cannot be reached, not one that
+            // refuses the drawing. A host that answers but rejects is healthy,
+            // and trying its other names would only turn an identity problem
+            // into a mystery.
+            var lastNetworkError: URLError?
+            for address in destination.host.allAddresses {
+                do {
+                    try await client.upload(
+                        snapshot,
+                        to: destination.host,
+                        secret: destination.secret ?? "",
+                        deviceID: destination.deviceID,
+                        address: address
+                    )
+                    if address != destination.host.address {
+                        rememberTheWorkingAddress(address, destination)
+                    }
+                    return
+                } catch let error as URLError {
+                    lastNetworkError = error
+                    continue
+                }
+                // An UploadError means some host answered: it escapes straight
+                // out, because more addresses are not the fix for that.
+            }
+            throw lastNetworkError ?? UploadError.invalidEndpoint
         }
         guard let endpoint = GoghModeEndpoint(destination.host.address) else {
             throw UploadError.invalidEndpoint
         }
         try await client.upload(snapshot, to: endpoint)
+    }
+
+    /// The saved address was stale and this one answered. Say so in the store —
+    /// a fallback that works silently forever is a retry nobody can see — and
+    /// keep the remembered destination in step with what just worked, so the
+    /// next retry starts where the last one succeeded.
+    private func rememberTheWorkingAddress(_ address: String, _ destination: Destination) {
+        var host = destination.host
+        host.address = address
+        hostStore?.updateAddress(address, for: host.id)
+        lastDestination = Destination(
+            host: host,
+            secret: destination.secret,
+            deviceID: destination.deviceID
+        )
     }
 
     private func guidance(for error: Error) -> String {

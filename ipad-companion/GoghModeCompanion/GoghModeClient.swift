@@ -155,14 +155,16 @@ struct GoghModeClient {
         _ snapshot: DrawingSnapshot,
         to host: SavedHost,
         secret: String,
-        deviceID: String
+        deviceID: String,
+        address: String? = nil
     ) async throws {
         _ = try await signedPost(
             try JSONEncoder().encode(snapshot),
             to: "/v2/save",
             on: host,
             secret: secret,
-            deviceID: deviceID
+            deviceID: deviceID,
+            address: address
         )
     }
 
@@ -174,14 +176,16 @@ struct GoghModeClient {
         _ pageID: String?,
         on host: SavedHost,
         secret: String,
-        deviceID: String
+        deviceID: String,
+        address: String? = nil
     ) async throws {
         _ = try await signedPost(
             try JSONEncoder().encode(["pageId": pageID]),
             to: "/v2/pin",
             on: host,
             secret: secret,
-            deviceID: deviceID
+            deviceID: deviceID,
+            address: address
         )
     }
 
@@ -189,26 +193,33 @@ struct GoghModeClient {
         _ pageID: String,
         on host: SavedHost,
         secret: String,
-        deviceID: String
+        deviceID: String,
+        address: String? = nil
     ) async throws {
         _ = try await signedPost(
             try JSONEncoder().encode(["pageId": pageID]),
             to: "/v2/promote",
             on: host,
             secret: secret,
-            deviceID: deviceID
+            deviceID: deviceID,
+            address: address
         )
     }
 
+    /// `address` names the host by a name other than its active one — a
+    /// fallback offered at pairing, tried when the active address stops
+    /// answering. Everything else about the request is identical, because the
+    /// signature is over the identity, never the address.
     @discardableResult
     private func signedPost(
         _ body: Data,
         to routePath: String,
         on host: SavedHost,
         secret: String,
-        deviceID: String
+        deviceID: String,
+        address: String? = nil
     ) async throws -> Data {
-        guard let url = URL(string: host.address + routePath) else {
+        guard let url = URL(string: (address ?? host.address) + routePath) else {
             throw UploadError.invalidEndpoint
         }
         let timestamp = Date().unixMillis

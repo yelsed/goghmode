@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use arboard::Clipboard;
 use egui::{Color32, RichText, Sense, Stroke as EguiStroke, TextureHandle, Vec2};
 
-use crate::host::{Host, PairingPayload, PairingState};
+use crate::host::{mdns_host_name, Host, PairingPayload, PairingState};
 use crate::mobile_server::MobileServer;
 use crate::pages::{
     list_pages, pages_dir, promote_page, read_pin, set_pin, sheet_numbers, PageEntry,
@@ -616,13 +616,27 @@ impl GoghModeApp {
     }
 
     fn start_pairing(&mut self, ctx: &egui::Context) {
-        // Only the address the host believes it is reachable on. A machine with
+        // The IP the host believes it is reachable on, first. A machine with
         // several interfaces should offer all of them; the payload field is
         // already a list so that is a fill-in, not a wire change.
-        let addresses = self
+        let mut addresses = self
             .server()
             .map(|server| vec![server.base_url()])
             .unwrap_or_default();
+
+        // Then the same machine named the way Bonjour already knows it. This
+        // is carried, not discovered: the name rides in the payload and the
+        // companion resolves it, so ADR-0004's ban on an mDNS crate stays
+        // intact. It is a second entry, never a replacement — the list still
+        // opens with the IP, which is what an older companion expects.
+        if let Some(server) = self.server() {
+            if let Some(name) = mdns_host_name() {
+                let url = server.base_url_on(&name);
+                if url != addresses[0] {
+                    addresses.push(url);
+                }
+            }
+        }
 
         match self.host.arm_pairing(addresses) {
             Ok(payload) => {

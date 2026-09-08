@@ -42,6 +42,11 @@ No HTTP framework, no async runtime, no TLS, no mDNS or Bonjour crate, no QR cra
 - Changing the embedded web app requires recompiling the binary, and an installed
   progressive web app still serves the cached shell until the service worker cache
   name is bumped.
+- **Carrying a `.local` name in the pairing payload is not a reversal of this.**
+  The name travels as data the companion already holds, and resolving it is the
+  OS's job, not an mDNS implementation on either side. Discovery — the host
+  advertising itself so a device that does not know it can find it — would be the
+  reversal, and it remains ruled out.
 
 ## Alternatives considered
 - **`axum` / `hyper` + `tokio`** — correct HTTP, real routing, and an async runtime

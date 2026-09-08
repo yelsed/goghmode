@@ -40,8 +40,11 @@ See [mobile-web-canvas](specs/pages/mobile-web-canvas.md).
 ### 🟢 Native iPad companion (Apple Pencil)
 A SwiftUI app built on PencilKit, so pressure, smoothing, palm rejection, and the
 standard Apple tool palette — pen, eraser, lasso, colours — behave the way they do
-in Apple's own apps. It uploads automatically 600 ms after you stop drawing and says
-plainly what to do when the Mac is not reachable.
+in Apple's own apps. It uploads automatically 600 ms after you stop drawing, keeps
+the screen awake while you draw (on by default), and says plainly what to do when
+the Mac is not reachable. Pairing remembers the Mac's network name as well as its
+address, so a changed Wi-Fi costs a fallback first and at most one scan to
+re-pair — never a re-setup.
 See [ipad-companion](specs/pages/ipad-companion.md).
 
 ### 🟢 One stable output contract
