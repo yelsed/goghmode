@@ -137,15 +137,19 @@ final class HostStore: ObservableObject {
     /// new host — which is the whole reason identity is not the address.
     ///
     /// The address that answered becomes active and moves to the front of the
-    /// offered set, so the next move has this one to fall back on.
-    func updateAddress(_ address: String, for hostID: String) {
-        guard let index = hosts.firstIndex(where: { $0.id == hostID }) else { return }
+    /// offered set, so the next move has this one to fall back on. The updated
+    /// host comes back, so a caller keeping a value copy stays in step with the
+    /// store's own merge instead of re-deriving it by hand.
+    @discardableResult
+    func updateAddress(_ address: String, for hostID: String) -> SavedHost? {
+        guard let index = hosts.firstIndex(where: { $0.id == hostID }) else { return nil }
         hosts[index].address = address
         if let position = hosts[index].addresses.firstIndex(of: address) {
             hosts[index].addresses.remove(at: position)
         }
         hosts[index].addresses.insert(address, at: 0)
         save()
+        return hosts[index]
     }
 
     func secret(for hostID: String) -> String? {

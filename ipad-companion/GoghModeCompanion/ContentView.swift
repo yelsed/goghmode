@@ -2,13 +2,25 @@ import PencilKit
 import SwiftUI
 import UIKit
 
+/// The one key every view reads: the two that apply the flag and the one that
+/// toggles it. A second, mistyped key would silently fork a second setting
+/// that never meets the first.
+let goghModeKeepAwakeKey = "goghModeKeepAwake"
+
+/// The whole keep-awake rule in one place: the flag, and only while the scene
+/// is active — the OS re-arms the idle timer the moment we background, so the
+/// decision is re-made on every phase change rather than held.
+func applyGoghModeKeepAwake(_ on: Bool, _ scenePhase: ScenePhase) {
+    UIApplication.shared.isIdleTimerDisabled = on && scenePhase == .active
+}
+
 /// The register is home. A sheet is somewhere you go and come back from, which is
 /// why the canvas is pushed rather than presented: the back button is the only
 /// "done" this app needs, and new sheets are only made where sheets are kept.
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("goghModeEndpoint") private var endpointText = ""
-    @AppStorage("goghModeKeepAwake") private var keepAwake = true
+    @AppStorage(goghModeKeepAwakeKey) private var keepAwake = true
     @StateObject private var uploader: UploadController
     @StateObject private var pageStore = PageStore()
     @StateObject private var hostStore: HostStore
@@ -55,7 +67,7 @@ struct ContentView: View {
             // host list, so updating the app does not look like losing the
             // connection.
             hostStore.adoptLegacyEndpoint(endpointText)
-            applyKeepAwake()
+            applyGoghModeKeepAwake(keepAwake, scenePhase)
         }
         .onChange(of: scenePhase) { _, newPhase in
             // Coming back to the app is the moment the host is most likely to
@@ -65,7 +77,13 @@ struct ContentView: View {
                 uploader.forgetWhatTheHostAccepts()
                 uploader.retryIfOffline()
             }
-            applyKeepAwake()
+            applyGoghModeKeepAwake(keepAwake, scenePhase)
+        }
+        .onChange(of: keepAwake) { _, _ in
+            // The toggle is reached from the host list, which sits right on top
+            // of this view: flipping it while the app is on screen has to take
+            // effect now, not at the next backgrounding.
+            applyGoghModeKeepAwake(keepAwake, scenePhase)
         }
         .onChange(of: hostStore.selectedHostID) { _, _ in
             uploader.forgetWhatTheHostAccepts()
@@ -98,12 +116,6 @@ struct ContentView: View {
         }
     }
 
-    /// The idle timer only answers to us while the scene is active: the OS
-    /// re-arms it the moment we background, so we re-decide on every phase
-    /// change rather than holding onto a flag it has already ignored.
-    private func applyKeepAwake() {
-        UIApplication.shared.isIdleTimerDisabled = keepAwake && scenePhase == .active
-    }
 }
 
 /// One sheet, open. Everything here is about the drawing: the register's facts stay
@@ -117,7 +129,7 @@ struct CanvasView: View {
     let destination: UploadController.Destination
 
     @Environment(\.scenePhase) private var scenePhase
-    @AppStorage("goghModeKeepAwake") private var keepAwake = true
+    @AppStorage(goghModeKeepAwakeKey) private var keepAwake = true
     @State private var drawing = PKDrawing()
     @State private var reloadSignal = 0
     /// The live drawing surface, which is the view. Reported by the canvas rather
@@ -246,7 +258,7 @@ struct CanvasView: View {
                 uploadCurrentSheet()
                 store.flushRevisions()
             }
-            applyKeepAwake()
+            applyGoghModeKeepAwake(keepAwake, scenePhase)
         }
         .sheet(item: $renaming) { target in
             RenameSheet(target: target) { _, name in
@@ -401,20 +413,16 @@ struct CanvasView: View {
             }
         }
     }
-
-    /// Same contract as the register's: the idle timer is ours to hold only
-    /// while the sheet is in front of the user.
-    private func applyKeepAwake() {
-        UIApplication.shared.isIdleTimerDisabled = keepAwake && scenePhase == .active
-    }
 }
 
 /// Connection state as a chip that keeps one shape in every state.
 ///
 /// It used to size itself to whatever it was saying, and two states appended a
 /// whole sentence on top of that, so the toolbar and the register head line
-/// jumped on every transition. Both slots are reserved at their widest now, and
-/// the sentence belongs to the notice line, which has room for it.
+/// jumped on every transition. Every slot is reserved now — the label and the
+/// time at their widest, the machine name at a fixed width — so the chip is one
+/// size in every state, and the sentence belongs to the notice line, which has
+/// room for it.
 struct StatusBadge: View {
     let status: UploadController.Status
     let canRetry: Bool
@@ -443,7 +451,7 @@ struct StatusBadge: View {
         Button(action: {
             if case .needsRepair = status {
                 onRePair?()
-            } else {
+            } else if canRetry {
                 onRetry()
             }
         }) {
@@ -461,7 +469,10 @@ struct StatusBadge: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(!canRetry && onRePair == nil)
+        // Disabled in every state that is not a retry — in particular
+        // `.wrongHost`: a tap there would re-upload into a machine that cannot
+        // prove itself, which is the thing the state exists to prevent.
+        .disabled(!canRetry && !isRepair)
         // The stamp control beside this one animates on a spring. Without this the
         // badge's own relayout gets dragged along by it.
         .animation(nil, value: status)
@@ -497,16 +508,24 @@ struct StatusBadge: View {
             }
     }
 
-    /// Filled only when a paired host's whole address set went silent. Naming the
-    /// machine tells you which one to re-pair, because the list can hold several.
-    @ViewBuilder
+    /// The machine whose whole address set went silent. The slot is present at
+    /// a fixed width in every state — the chip keeps its one shape, so a long
+    /// name truncates rather than stretching it — and only the repair fills it,
+    /// because naming the machine tells you which one to re-pair.
     private var repairTarget: some View {
-        if case .needsRepair(let name) = status {
-            Text(name)
-                .font(.caption)
-                .foregroundStyle(Sheet.onGroundSecondary)
-                .lineLimit(1)
-        }
+        Text("GoghMode host")
+            .font(.caption)
+            .hidden()
+            .frame(width: 76, alignment: .leading)
+            .overlay(alignment: .leading) {
+                if case .needsRepair(let name) = status {
+                    Text(name)
+                        .font(.caption)
+                        .foregroundStyle(Sheet.onGroundSecondary)
+                        .lineLimit(1)
+                        .frame(width: 76, alignment: .leading)
+                }
+            }
     }
 
     private func badgeText(_ text: String) -> some View {
@@ -521,6 +540,16 @@ struct StatusBadge: View {
             return "Saved at \(at.formatted(.dateTime.hour().minute()))"
         }
         return status.label
+    }
+
+    /// The one state the chip is tappable in that `canRetry` deliberately
+    /// excludes: a re-pair starts a fresh identity check, which is allowed,
+    /// whereas retrying the current host would be retrying into the wall.
+    private var isRepair: Bool {
+        if case .needsRepair = status {
+            return true
+        }
+        return false
     }
 
     private var tint: Color {

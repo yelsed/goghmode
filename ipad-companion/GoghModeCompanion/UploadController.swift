@@ -431,9 +431,13 @@ final class UploadController: ObservableObject {
     /// keep the remembered destination in step with what just worked, so the
     /// next retry starts where the last one succeeded.
     private func rememberTheWorkingAddress(_ address: String, _ destination: Destination) {
+        // The store owns the merge into the offered set, so its updated host is
+        // the copy that travels; without a store, only the active address moves.
         var host = destination.host
         host.address = address
-        hostStore?.updateAddress(address, for: host.id)
+        if let updated = hostStore?.updateAddress(address, for: host.id) {
+            host = updated
+        }
         lastDestination = Destination(
             host: host,
             secret: destination.secret,

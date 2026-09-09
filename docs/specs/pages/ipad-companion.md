@@ -33,10 +33,11 @@ Setup until paired, then a `NavigationStack` whose root is the register.
   button returns to the register. Toolbar: status badge (also retry), stamp control,
   rename, clear. Leaving the sheet uploads it immediately rather than waiting out the
   debounce.
-- **Keeping the screen awake** — on by default, user-toggleable from the host list.
-  The idle timer is held only while the scene is active: the OS re-arms it the
-  moment the app backgrounds, so the app re-decides on every phase change rather
-  than holding a flag the OS has already ignored.
+- **Keeping the screen awake** — on by default, user-toggleable from the host list,
+  and the toggle takes effect the moment it is flipped, not at the next phase
+  change. The idle timer is held only while the scene is active: the OS re-arms
+  it the moment the app backgrounds, so the app re-decides on every phase change
+  rather than holding a flag the OS has already ignored.
 
 ## Components
 
@@ -241,9 +242,10 @@ Errors map to actions, not codes:
 | Ruled | The sheet carries a ruling; the snapshot goes as schema version 3 and the export carries the rules. |
 | Ruling refused | The host predates ruling, so the sheet is re-sent plain and the notice line says why once. |
 
-The status chip holds one shape in every state. Both its slots, the label and the
-time, are reserved at their widest, so the bar it sits in does not jump. Anything
-longer than a label belongs on the notice line.
+The status chip holds one shape in every state: the label and the time are
+reserved at their widest, and the machine name in a repair is reserved at a
+fixed width (a longer name truncates), so the bar it sits in does not jump.
+Anything longer still belongs on the notice line.
 
 On an open sheet the notice line is drawn over the canvas, never stacked above it.
 A banner that takes layout space resizes the drawing surface the moment it appears,

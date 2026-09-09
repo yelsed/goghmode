@@ -7,7 +7,7 @@ struct HostListView: View {
     @ObservedObject var hostStore: HostStore
     @Environment(\.dismiss) private var dismiss
     @State private var showingPairing = false
-    @AppStorage("goghModeKeepAwake") private var keepAwake = true
+    @AppStorage(goghModeKeepAwakeKey) private var keepAwake = true
 
     var body: some View {
         NavigationStack {
