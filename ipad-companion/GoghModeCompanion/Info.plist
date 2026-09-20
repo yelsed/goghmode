@@ -31,6 +31,8 @@
 	<string>GoghMode sends your drawing to the desktop app on your local network.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>GoghMode reads the pairing code shown by the desktop app. The camera is used for nothing else.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>GoghMode records what you say while you draw, and turns it into text on this iPad. Audio stays on the device.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

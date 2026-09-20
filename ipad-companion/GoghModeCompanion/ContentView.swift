@@ -142,6 +142,9 @@ struct CanvasView: View {
     @State private var confirmingClear = false
     @State private var stamping = false
     @State private var showingRePair = false
+    /// One recorder per open sheet: a recording belongs to the sheet it was made
+    /// over, and closing the sheet ends it.
+    @StateObject private var recorder = NarrationRecorder()
 
     private var page: NotebookPage? {
         store.page(pageID)
@@ -196,6 +199,8 @@ struct CanvasView: View {
                     }
                 }
 
+                NarrationControl(state: recorder.state, action: toggleNarration)
+
                 Button(action: stepBack) {
                     Label("Undo", systemImage: "arrow.uturn.backward")
                 }
@@ -240,6 +245,12 @@ struct CanvasView: View {
             store.select(pageID)
             drawing = page?.drawing ?? PKDrawing()
             reloadSignal += 1
+            // A recording whose words never arrived — the app was killed, or the
+            // sheet was closed while they were still being read. Deliberately not
+            // a `.task`, which would be cancelled by leaving the sheet again.
+            keepWhenReady { [recorder, pageID] in
+                await recorder.transcribePendingAudio(for: pageID)
+            }
         }
         // Leaving the sheet — back to the register, or the app being put away — is
         // when work is most likely to be lost: the app can be killed in the
@@ -248,6 +259,7 @@ struct CanvasView: View {
             // The pause may never come: leaving is itself the pause.
             pendingRevision?.cancel()
             store.recordRevision(pageID, drawing)
+            finishNarration()
             uploadCurrentSheet()
             store.flushRevisions()
         }
@@ -255,6 +267,7 @@ struct CanvasView: View {
             if newPhase == .background {
                 pendingRevision?.cancel()
                 store.recordRevision(pageID, drawing)
+                finishNarration()
                 uploadCurrentSheet()
                 store.flushRevisions()
             }
@@ -291,8 +304,10 @@ struct CanvasView: View {
     /// carries these sentences, so this is where they are read.
     private var notice: String? {
         uploader.complaint
+            ?? recorder.complaint
             ?? uploader.pagesUnsupportedMessage
             ?? uploader.rulingUnsupportedMessage
+            ?? uploader.narrationUnsupportedMessage
     }
 
     /// Changing the ruling changes what the exported page looks like, so the host
@@ -322,8 +337,54 @@ struct CanvasView: View {
             pencilDrawing,
             canvasSize: canvasSize,
             page: page?.pageRef,
-            ruling: page?.ruling
+            ruling: page?.ruling,
+            narration: page?.spokenNarration
         )
+    }
+
+    /// One button, two meanings: start listening, or stop and keep what was said.
+    private func toggleNarration() {
+        switch recorder.state {
+        case .recording:
+            keepWhenReady { [recorder] in await recorder.stop() }
+        case .idle, .failed:
+            Task { [recorder, pageID] in await recorder.start(for: pageID) }
+        case .preparingModel, .transcribing:
+            break
+        }
+    }
+
+    /// Leaving the sheet ends the recording that belongs to it. The transcription
+    /// runs on under a background task and the words arrive when they are ready,
+    /// which is why nothing here waits for them.
+    private func finishNarration() {
+        guard recorder.isRecording else { return }
+        keepWhenReady { [recorder] in await recorder.stop() }
+    }
+
+    /// Words land on the sheet and go to the Mac at once rather than waiting for
+    /// the next stroke: someone who has finished talking about a sheet is often
+    /// finished drawing on it too.
+    ///
+    /// They may arrive after the sheet has been left, so everything they need is
+    /// taken before the wait. A `@StateObject` or `@State` read once its view is
+    /// gone is a fresh value, not the recorder that was listening or the drawing
+    /// that was made — which is also why the upload is built from the store's
+    /// copy of the sheet rather than the canvas.
+    private func keepWhenReady(_ words: @escaping @MainActor () async -> [NarrationSegment]) {
+        let recorder = self.recorder
+        let store = self.store
+        let uploader = self.uploader
+        let destination = self.destination
+        let pageID = self.pageID
+        Task { @MainActor in
+            let spoken = await words()
+            guard !spoken.isEmpty else { return }
+            store.appendNarration(spoken, to: pageID, from: recorder.engineName)
+            if let page = store.page(pageID) {
+                uploader.uploadNow(snapshot: page.snapshot, to: destination)
+            }
+        }
     }
 
     /// One state per pause in the writing.
@@ -557,6 +618,119 @@ struct StatusBadge: View {
         case .idle, .saved: Sheet.review
         case .waiting, .saving: Sheet.inkLabel
         case .failed, .wrongHost, .needsRepair: Sheet.stamp
+        }
+    }
+}
+
+/// Recording what is being said over the sheet, as one button that reports what
+/// it is doing.
+///
+/// Sized like `StatusBadge`: the widest thing it can ever show is reserved in
+/// every state and the live content laid over it, so starting a recording or
+/// bringing a model down does not shift the buttons beside it.
+struct NarrationControl: View {
+    let state: NarrationRecorder.State
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: symbol)
+                    .imageScale(.medium)
+                reading
+            }
+            .foregroundStyle(tint)
+            .padding(.horizontal, 6)
+            .frame(height: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!isTappable)
+        // The stamp control beside this one animates on a spring. Without this
+        // its relayout drags this one along with it.
+        .animation(nil, value: state)
+        .accessibilityLabel(Text(spokenLabel))
+    }
+
+    /// Mono, and reserved at the width of the longest thing any state puts here,
+    /// so 09% and 12:34 occupy exactly the same slot.
+    private var reading: some View {
+        readingText("00:00")
+            .hidden()
+            .overlay(alignment: .leading) {
+                switch state {
+                case .idle, .failed:
+                    EmptyView()
+                case .preparingModel(let fraction):
+                    readingText("\(Int((fraction * 100).rounded()))%")
+                        .fixedSize()
+                case .recording(let since):
+                    elapsed(since: since)
+                case .transcribing:
+                    ProgressView()
+                        .controlSize(.mini)
+                }
+            }
+    }
+
+    private func readingText(_ text: String) -> some View {
+        Text(text)
+            .font(.caption2.monospaced().weight(.medium))
+            .lineLimit(1)
+    }
+
+    private func elapsed(since start: Date) -> some View {
+        TimelineView(.periodic(from: start, by: 1)) { context in
+            readingText(NarrationControl.clock(context.date.timeIntervalSince(start)))
+                .fixedSize()
+        }
+    }
+
+    /// mm:ss, and it keeps counting past the hour rather than wrapping — a long
+    /// explanation is the case this feature exists for.
+    static func clock(_ seconds: TimeInterval) -> String {
+        let whole = Int(max(0, seconds))
+        return String(format: "%02d:%02d", whole / 60, whole % 60)
+    }
+
+    private var symbol: String {
+        switch state {
+        case .idle, .preparingModel: "mic"
+        case .recording: "waveform"
+        case .transcribing: "text.bubble"
+        case .failed: "mic.slash"
+        }
+    }
+
+    /// Review blue while recording, because something is live and the sheet
+    /// should say so. Stamp red stays reserved for the issue stamp, so a failure
+    /// goes quiet here and the sentence goes to the notice line.
+    private var tint: Color {
+        switch state {
+        case .recording: Sheet.review
+        case .failed: Sheet.inkLabel
+        case .idle, .preparingModel, .transcribing: Sheet.onGround
+        }
+    }
+
+    /// A model coming down and a transcription under way both end on their own,
+    /// and there is nothing a tap could do but interrupt them.
+    private var isTappable: Bool {
+        switch state {
+        case .idle, .recording, .failed: true
+        case .preparingModel, .transcribing: false
+        }
+    }
+
+    private var spokenLabel: String {
+        switch state {
+        case .idle: "Record what you say while you draw"
+        case .preparingModel(let fraction):
+            "Getting the transcriber ready, \(Int((fraction * 100).rounded())) per cent"
+        case .recording(let since):
+            "Recording, \(NarrationControl.clock(Date().timeIntervalSince(since))). Press to stop."
+        case .transcribing: "Turning what you said into text"
+        case .failed: "Recording failed. Press to try again."
         }
     }
 }

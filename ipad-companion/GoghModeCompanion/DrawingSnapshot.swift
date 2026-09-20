@@ -4,12 +4,17 @@ import PencilKit
 import UIKit
 
 /// Mirrors `DrawingSnapshot` in `src/drawing.rs`, validated by `check_snapshot`
-/// in `src/mobile_server.rs`. The two definitions must stay in step.
+/// in `src/mobile_server.rs`. The two definitions must stay in step, including
+/// the optional fields: a key this app invents that the host has never heard of
+/// is a 400 on every save.
 struct DrawingSnapshot: Codable, Equatable {
     let schemaVersion: Int
     let page: PageRef?
     let canvas: CanvasSize
     let strokes: [Stroke]
+    /// Absent on a sheet nobody spoke over, which is every sheet until someone
+    /// records one. A `var` so the memberwise initialiser defaults it.
+    var narration: Narration?
 }
 
 struct PageRef: Codable, Equatable {
@@ -22,6 +27,13 @@ let pagelessSchemaVersion = 1
 /// The version that can carry ruling. Only sent by a sheet that has some, so a
 /// plain sheet never needs a host new enough to understand it.
 let ruledSchemaVersion = 3
+/// The version that can carry what was said. Same rule as ruling: asked for only
+/// by a sheet that was spoken over.
+let narratedSchemaVersion = 4
+
+/// The one language the transcriber is asked for. A setting comes later; until
+/// then the sheet says what was actually transcribed rather than guessing.
+let narrationLanguage = "nl"
 
 /// The size to assume for a sheet whose canvas is not open.
 ///
@@ -88,6 +100,14 @@ struct Stroke: Codable, Equatable, Identifiable {
     let id: String
     let color: String
     let width: Double
+    /// When this stroke was begun, in epoch milliseconds off the iPad's own
+    /// clock. A point's `t` is an offset inside its own stroke and says nothing
+    /// about when the stroke was made, so this is the only thing that can line
+    /// ink up against words. Sent at every version — an older host ignores a key
+    /// it does not know, and nothing visible is lost when it does.
+    ///
+    /// A `var` so the memberwise initialiser defaults it.
+    var startedAt: UInt64?
     let points: [Point]
 }
 
@@ -96,6 +116,25 @@ struct Point: Codable, Equatable {
     let y: Double
     let pressure: Double
     let t: UInt64
+}
+
+/// One thing that was said, placed on the same clock as `Stroke.startedAt` so
+/// the host can pair a sentence with the ink drawn while it was spoken.
+struct NarrationSegment: Codable, Equatable {
+    let start: UInt64
+    let end: UInt64
+    let text: String
+}
+
+/// Everything said over one sheet, in the order it was said. Several recordings
+/// on one sheet append to the same list; erasing a stroke does not erase the
+/// words that went with it.
+struct Narration: Codable, Equatable {
+    let language: String
+    /// Which transcriber produced this, so the host can say what read it back.
+    /// Absent where the sheet was filled before the model named itself.
+    let engine: String?
+    let segments: [NarrationSegment]
 }
 
 extension DrawingSnapshot {
@@ -114,13 +153,15 @@ extension DrawingSnapshot {
     }
 
     /// A host that predates pages rejects anything above version 1, so the app
-    /// sends the same drawing without its page rather than not at all.
+    /// sends the same drawing without its page rather than not at all. Version 1
+    /// has no room for words either, so they are left behind here too.
     func withoutPage() -> DrawingSnapshot {
         DrawingSnapshot(
             schemaVersion: pagelessSchemaVersion,
             page: nil,
             canvas: canvas,
-            strokes: strokes
+            strokes: strokes,
+            narration: nil
         )
     }
 
@@ -129,7 +170,10 @@ extension DrawingSnapshot {
     func withoutRuling() -> DrawingSnapshot {
         guard canvas.ruling != nil else { return self }
         return DrawingSnapshot(
-            schemaVersion: min(schemaVersion, currentSchemaVersion),
+            schemaVersion: min(
+                schemaVersion,
+                narration == nil ? currentSchemaVersion : narratedSchemaVersion
+            ),
             page: page,
             canvas: CanvasSize(
                 width: canvas.width,
@@ -137,7 +181,25 @@ extension DrawingSnapshot {
                 background: canvas.background,
                 ruling: nil
             ),
-            strokes: strokes
+            strokes: strokes,
+            narration: narration
+        )
+    }
+
+    /// The same sheet without what was said over it, for a host that predates
+    /// narration. The ink is the sheet; the words are commentary on it, and a
+    /// sheet arriving silent beats a sheet not arriving.
+    func withoutNarration() -> DrawingSnapshot {
+        guard narration != nil else { return self }
+        return DrawingSnapshot(
+            schemaVersion: min(
+                schemaVersion,
+                canvas.ruling == nil ? currentSchemaVersion : ruledSchemaVersion
+            ),
+            page: page,
+            canvas: canvas,
+            strokes: strokes,
+            narration: nil
         )
     }
 
@@ -145,7 +207,8 @@ extension DrawingSnapshot {
         _ drawing: PKDrawing,
         canvasSize: CGSize,
         page: PageRef? = nil,
-        ruling: SheetRuling? = nil
+        ruling: SheetRuling? = nil,
+        narration: Narration? = nil
     ) -> DrawingSnapshot {
         // Grown to cover anything drawn past the page rather than clamped to it: a
         // sheet written on before the page had a fixed size, on an iPad held in
@@ -174,14 +237,20 @@ extension DrawingSnapshot {
                 id: "stroke-\(strokeIndex + 1)",
                 color: pencilStroke.ink.color.hexRGB,
                 width: Double(averagePointWidth(in: pencilStroke.path).clamped(to: 1...80)),
+                startedAt: epochMilliseconds(pencilStroke.path.creationDate),
                 points: points
             )
         }
 
+        // A narration with no segments is nobody having said anything, and must
+        // not push the sheet onto a version an older host would refuse.
+        let spoken: Narration? = narration?.segments.isEmpty == false ? narration : nil
+
         return DrawingSnapshot(
-            // Only a ruled sheet asks for the newer version, so nothing changes for
-            // anyone drawing on plain paper against an older host.
-            schemaVersion: ruling == nil ? currentSchemaVersion : ruledSchemaVersion,
+            // Only a sheet that carries the feature asks for the version that can
+            // hold it, so nothing changes for anyone drawing on plain paper
+            // against an older host.
+            schemaVersion: version(carryingRuling: ruling != nil, narration: spoken != nil),
             page: page,
             canvas: CanvasSize(
                 width: Double(width),
@@ -189,8 +258,15 @@ extension DrawingSnapshot {
                 background: "#ffffff",
                 ruling: ruling
             ),
-            strokes: strokes
+            strokes: strokes,
+            narration: spoken
         )
+    }
+
+    private static func version(carryingRuling ruled: Bool, narration narrated: Bool) -> Int {
+        if narrated { return narratedSchemaVersion }
+        if ruled { return ruledSchemaVersion }
+        return currentSchemaVersion
     }
 }
 
@@ -212,6 +288,14 @@ private func roundedToHundredths(_ value: CGFloat) -> Double {
 private func roundedToThousandths(_ value: CGFloat) -> Double {
     guard value.isFinite else { return 0 }
     return (Double(value) * 1000).rounded() / 1000
+}
+
+/// A date before 1970 cannot be a moment on this clock, so it is reported as no
+/// answer rather than as a wrong one.
+private func epochMilliseconds(_ date: Date) -> UInt64? {
+    let milliseconds = date.timeIntervalSince1970 * 1000
+    guard milliseconds.isFinite, milliseconds >= 0 else { return nil }
+    return UInt64(milliseconds)
 }
 
 private func averagePointWidth(in path: PKStrokePath) -> CGFloat {
