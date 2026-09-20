@@ -36,15 +36,16 @@ Work through these steps in order. Tell me plainly when a step needs my hands.
      uploaded today by run 35517659477).
    - Open the app. Check in the Mac's Devices view that this iPad is paired; re-pair by QR if not.
    - Open a new sheet. Tap the microphone button in the top bar, between the stamp and undo.
-     First time: allow the microphone, then wait while the model downloads (about 626 MB; the
-     button shows the percentage) and is prepared for the Neural Engine (a spinner in the button,
-     and the notice line says it takes a few minutes the first time). The button starts counting
-     when it is listening.
+     Recording starts at once and the clock runs. First time: allow the microphone; the model
+     (about 626 MB) downloads in the background while you talk, and the notice line says so.
    - While recording, in Dutch: say one sentence and draw a group of strokes in the top-left; pause;
      say a second sentence and draw a second group in the centre; pause; say a third sentence and
      draw a third group bottom-right. Then go back into the first group, add one stroke there, and
      say a fourth sentence about it.
-   - Tap the button again to stop. Wait until the spinner is gone. Stamp the sheet.
+   - Tap the button again to stop. The first time, the button now shows the download percentage
+     and then a spinner while the model is prepared for the Neural Engine (a few minutes), and
+     the notice line says nothing is lost meanwhile. Wait until the button shows `mic.fill` with
+     the recorded total. Stamp the sheet.
 
 5. **Check what the host wrote.** In `~/Pictures/GoghMode/drawings/`:
    - `latest.json` has `"schemaVersion": 4`, a `narration` block with four segments of Dutch text,

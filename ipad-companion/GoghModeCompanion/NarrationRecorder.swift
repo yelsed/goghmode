@@ -85,10 +85,13 @@ private final class NarrationModel {
 final class NarrationRecorder: ObservableObject {
     enum State: Equatable {
         case idle
-        /// Downloading, with how far along.
+        /// A recording has stopped and its words wait for the model, which is
+        /// still downloading, with how far along. Never before a recording: a tap
+        /// means record now, and the model is fetched while the person talks.
         case preparingModel(Double)
-        /// Downloaded, and being compiled for the Neural Engine. Minutes the first
-        /// time; there is no fraction to show, so the control shows motion instead.
+        /// Downloaded, and being compiled for the Neural Engine before it can read
+        /// what was said. Minutes the first time; there is no fraction to show, so
+        /// the control shows motion instead.
         case loadingModel
         case recording(since: Date)
         case transcribing
@@ -124,6 +127,9 @@ final class NarrationRecorder: ObservableObject {
     }
 
     private var whisperKit: WhisperKit?
+    /// Listens on its own, without the model: a tap has to start recording at
+    /// once, and the model can take minutes to arrive the first time.
+    private let audioProcessor = AudioProcessor()
     private var audioFile: AVAudioFile?
     private var recordingStartedAtMilliseconds: UInt64 = 0
     private var pageID = ""
@@ -141,9 +147,11 @@ final class NarrationRecorder: ObservableObject {
         )
     }
 
-    /// Starts listening over the named sheet. The model comes down on first use,
-    /// which is why preparing is a state the control can show rather than a wait
-    /// with nothing on screen.
+    /// Starts listening over the named sheet at once. A tap means record now;
+    /// the model is fetched and warmed in the background while the person talks,
+    /// and the words are read when the recording stops. The first version made
+    /// the tap wait for the model, which took minutes the first time and then
+    /// started recording on its own once nobody was watching.
     func start(for pageID: String) async {
         switch state {
         case .idle, .failed: break
@@ -160,42 +168,35 @@ final class NarrationRecorder: ObservableObject {
             return
         }
 
-        state = .preparingModel(0)
-        if !NarrationModel.shared.isLoaded {
-            hint = "Getting the speech model ready. The first time this takes a few minutes; the button starts counting once it is listening."
-        }
         do {
-            let whisperKit = try await NarrationModel.shared.whisperKit { [weak self] preparation in
-                Task { @MainActor in
-                    guard let self else { return }
-                    switch (self.state, preparation) {
-                    case (.preparingModel, .downloading(let fraction)):
-                        self.state = .preparingModel(fraction)
-                    case (.preparingModel, .loading), (.loadingModel, .loading):
-                        self.state = .loadingModel
-                    default:
-                        break
-                    }
-                }
-            }
-            self.whisperKit = whisperKit
-            hint = nil
-
             let startedAt = Date()
             recordingStartedAtMilliseconds = UInt64(max(0, startedAt.timeIntervalSince1970 * 1000))
             audioFile = try makeAudioFile(for: pageID, startedAt: recordingStartedAtMilliseconds)
 
             // Configures the audio session itself, so nothing here touches
             // `AVAudioSession` and the two cannot disagree about the category.
-            // Empties the sample buffer as it starts, so the model outliving this
-            // sheet does not mean the previous sheet's words do.
-            try whisperKit.audioProcessor.startRecordingLive { [weak self] samples in
+            // Empties the sample buffer as it starts, so a recorder outliving one
+            // sheet does not carry the previous sheet's words into the next.
+            try audioProcessor.startRecordingLive { [weak self] samples in
                 Task { @MainActor in self?.append(samples) }
             }
             state = .recording(since: startedAt)
         } catch {
             fail("Recording could not start: \(error.localizedDescription)")
+            return
         }
+
+        if !NarrationModel.shared.isLoaded {
+            hint = "Recording. The speech model is still being prepared in the background; what you say is kept and read when you stop."
+            warmModel()
+        }
+    }
+
+    /// Brings the model up while the recording runs, so stopping rarely has to
+    /// wait. A failure is not reported from here: the audio is on disk, and
+    /// stopping asks for the model again and reports then.
+    private func warmModel() {
+        Task { _ = try? await NarrationModel.shared.whisperKit { _ in } }
     }
 
     /// Stops, transcribes, and hands back what was said.
@@ -205,13 +206,16 @@ final class NarrationRecorder: ObservableObject {
     /// the sentence explaining the drawing.
     @discardableResult
     func stop() async -> Recording {
-        guard case .recording(let since) = state, let whisperKit else { return .nothing }
+        guard case .recording(let since) = state else { return .nothing }
 
-        whisperKit.audioProcessor.stopRecording()
-        let recorded = Array(whisperKit.audioProcessor.audioSamples)
+        audioProcessor.stopRecording()
+        let recorded = Array(audioProcessor.audioSamples)
         let startedAtMilliseconds = recordingStartedAtMilliseconds
         let duration = Date().timeIntervalSince(since)
         state = .transcribing
+        hint = NarrationModel.shared.isLoaded
+            ? nil
+            : "Getting the speech model ready to read what you said. The first time this takes a few minutes; nothing is lost while it does."
 
         beginBackgroundTask()
         defer { endBackgroundTask() }
@@ -227,6 +231,7 @@ final class NarrationRecorder: ObservableObject {
                 recorded,
                 startedAtMilliseconds: startedAtMilliseconds
             )
+            hint = nil
             state = .idle
             return Recording(segments: spoken, duration: duration)
         } catch {

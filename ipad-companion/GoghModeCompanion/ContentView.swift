@@ -715,11 +715,13 @@ struct NarrationControl: View {
     }
 
     /// A filled microphone says the sheet already has words; the tap adds more.
+    /// The speech bubble covers every state between stopping and the words
+    /// landing, model fetch included: from the outside it is all one wait.
     private var symbol: String {
         switch state {
-        case .idle, .preparingModel, .loadingModel: recordedBefore > 0 ? "mic.fill" : "mic"
+        case .idle: recordedBefore > 0 ? "mic.fill" : "mic"
         case .recording: "waveform"
-        case .transcribing: "text.bubble"
+        case .preparingModel, .loadingModel, .transcribing: "text.bubble"
         case .failed: "mic.slash"
         }
     }
@@ -750,8 +752,8 @@ struct NarrationControl: View {
             "This sheet has \(NarrationControl.clock(recordedBefore)) of narration. Press to add to it."
         case .idle: "Record what you say while you draw"
         case .preparingModel(let fraction):
-            "Downloading the transcriber, \(Int((fraction * 100).rounded())) per cent"
-        case .loadingModel: "Getting the transcriber ready"
+            "Reading what you said once the transcriber is downloaded, \(Int((fraction * 100).rounded())) per cent"
+        case .loadingModel: "Reading what you said once the transcriber is ready"
         case .recording(let since):
             "Recording, \(NarrationControl.clock(recordedBefore + Date().timeIntervalSince(since))). Press to stop."
         case .transcribing: "Turning what you said into text"

@@ -183,13 +183,20 @@ Undo, holding one width in every state the way the status chip does:
 
 | State | Shows | Tappable |
 | --- | --- | --- |
-| Idle, nothing said yet | `mic` | Yes — starts recording. |
+| Idle, nothing said yet | `mic` | Yes — starts recording at once. |
 | Idle, sheet has words | `mic.fill` and the total recorded so far in mono | Yes — records more; the clock counts on from that total. |
-| Downloading | `mic` and the download percentage in mono | No — the model finishes on its own. |
-| Loading | `mic` and a small spinner; the notice line says the first time takes minutes | No. |
-| Recording | `waveform` and `mm:ss` (total so far plus this recording), in review blue | Yes — stops and keeps what was said. |
+| Recording | `waveform` and `mm:ss` (total so far plus this recording), in review blue. If the model is not ready yet it is fetched in the background and the notice line says so. | Yes — stops and keeps what was said. |
+| Stopped, model downloading | `text.bubble` and the download percentage in mono | No — the words wait for the model. |
+| Stopped, model loading | `text.bubble` and a small spinner; the notice line says the first time takes minutes and nothing is lost | No. |
 | Transcribing | `text.bubble` and a small spinner | No. |
 | Failed | `mic.slash`, quiet | Yes — tries again. The sentence is on the notice line. |
+
+A tap means record now. The first build made the tap wait for the model, which
+took minutes the first time and then began recording on its own once nobody was
+watching; the recorder now listens on its own `AudioProcessor` from the tap and
+asks for the model only when the recording stops. Preparing is therefore never
+shown as a kind of recording, and a tap while the words are being read does
+nothing rather than clearing anything.
 
 Recording belongs to the sheet it was made over. Closing the sheet or
 backgrounding the app stops it, and the transcription runs on under
