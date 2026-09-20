@@ -129,7 +129,8 @@ reasoning in [ADR-0008](decisions/0008-narration-is-transcribed-on-the-device.md
 - [x] A second skill, `goghmode-narrated`, installed beside an unchanged `/goghmode`.
 - [ ] iPad: WhisperKit, the record control, WAV kept per sheet, transcription on
       stop, recovery of a recording the app was killed during, fallback for an
-      older host. Written; needs a device build through CI to verify.
+      older host. Built and tested on CI, on TestFlight; the on-device check is
+      what remains.
 - [ ] Later: a "narrated" fact in both registers, a language setting, live
       captions while recording, and the fine-tuning pipeline that reads the kept
       recordings.
