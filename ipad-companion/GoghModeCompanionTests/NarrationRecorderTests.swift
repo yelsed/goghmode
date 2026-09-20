@@ -39,6 +39,15 @@ final class NarrationRecorderTests: XCTestCase {
         XCTAssertNil(segment(0, 1, ""))
     }
 
+    /// Whisper marks a stretch it heard nothing in with asterisks or dots. That is
+    /// silence, not a sentence, and it stays on the device.
+    func testASilentStretchIsNotASentence() throws {
+        XCTAssertNil(segment(0, 1, "***"))
+        XCTAssertNil(segment(0, 1, "..."))
+        XCTAssertNil(segment(0, 1, " * * * "))
+        XCTAssertEqual(try XCTUnwrap(segment(0, 1, "Eh.")).text, "Eh.")
+    }
+
     /// The model's own markers are not something anyone said, and a segment that
     /// holds nothing else is silence.
     func testTheModelsOwnMarkersAreNotWords() throws {

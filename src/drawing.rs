@@ -94,6 +94,15 @@ pub struct NarrationSegment {
     pub text: String,
 }
 
+impl NarrationSegment {
+    /// Whisper marks a stretch it heard nothing in with a run of asterisks or
+    /// dots. Nobody said that, and quoted in markdown `***` is a horizontal
+    /// rule, so a step built on it reads as an empty quote.
+    pub fn has_words(&self) -> bool {
+        self.text.chars().any(char::is_alphanumeric)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DrawingSnapshot {
     #[serde(rename = "schemaVersion")]
@@ -106,6 +115,23 @@ pub struct DrawingSnapshot {
     /// Absent before schema version 4, and absent on a sheet nobody spoke over.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub narration: Option<Narration>,
+}
+
+impl DrawingSnapshot {
+    /// The same sheet with the wordless stretches dropped from its narration.
+    /// A narration left with nothing said is no narration, so such a sheet is
+    /// written as a plain one and no stale timeline survives it. The companion
+    /// drops these before they leave the device; this covers an older one.
+    pub fn without_silence(&self) -> DrawingSnapshot {
+        let mut spoken = self.clone();
+        if let Some(narration) = spoken.narration.as_mut() {
+            narration.segments.retain(NarrationSegment::has_words);
+            if narration.segments.is_empty() {
+                spoken.narration = None;
+            }
+        }
+        spoken
+    }
 }
 
 pub const CURRENT_SCHEMA_VERSION: u8 = 4;

@@ -660,6 +660,38 @@ fn words_without_ink_fold_into_the_step_before_them_and_a_cap_merges_neighbours(
     assert_eq!(markdown.matches("> zin ").count(), 150);
 }
 
+/// Whisper writes `***` for a stretch it heard nothing in. Nobody said that,
+/// and in markdown a quoted `***` is a horizontal rule.
+#[test]
+fn a_silent_stretch_is_not_a_sentence_and_a_sheet_of_only_silence_is_plain() {
+    let temp = tempfile::tempdir().unwrap();
+    let spoken = narrated_snapshot(
+        (200.0, 200.0),
+        &[(20.0, 20.0, 60.0, 60.0, 5_500), (80.0, 80.0, 120.0, 120.0, 6_000)],
+        &[(1_000, 2_000, "***"), (5_000, 7_000, "Dan de API.")],
+    );
+
+    write_artifacts(&spoken, temp.path(), "latest", "drawings/", None).unwrap();
+
+    let timeline = fs::read_to_string(temp.path().join("latest.timeline.md")).unwrap();
+    assert!(timeline.contains("## Step 1"));
+    assert!(!timeline.contains("## Step 2"));
+    assert!(timeline.contains("> Dan de API."));
+    assert!(!timeline.contains("***"), "{timeline}");
+    assert!(!fs::read_to_string(temp.path().join("latest.json")).unwrap().contains("***"));
+    assert!(temp.path().join("latest.steps").join("001.png").exists());
+    assert!(!temp.path().join("latest.steps").join("002.png").exists());
+
+    let mut silence = spoken.clone();
+    silence.narration.as_mut().unwrap().segments.truncate(1);
+    let files = write_artifacts(&silence, temp.path(), "latest", "drawings/", None).unwrap();
+
+    assert_eq!(files.timeline, None);
+    assert!(!temp.path().join("latest.timeline.md").exists());
+    assert!(!temp.path().join("latest.steps").exists());
+    assert!(!fs::read_to_string(temp.path().join("latest.json")).unwrap().contains("narration"));
+}
+
 #[test]
 fn a_plain_sheet_after_a_narrated_one_takes_the_words_away_with_it() {
     let temp = tempfile::tempdir().unwrap();

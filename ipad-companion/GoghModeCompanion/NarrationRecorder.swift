@@ -289,7 +289,9 @@ final class NarrationRecorder: ObservableObject {
         let spoken = text
             .replacingOccurrences(of: "<\\|[^|]*\\|>", with: "", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !spoken.isEmpty else { return nil }
+        // Whisper writes a run of asterisks or dots for a stretch it heard nothing
+        // in. Nobody said that, and it must not leave the device as if someone had.
+        guard spoken.rangeOfCharacter(from: .alphanumerics) != nil else { return nil }
 
         let from = recordingStartedAtMilliseconds + milliseconds(from: start)
         let until = recordingStartedAtMilliseconds + milliseconds(from: end)

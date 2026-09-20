@@ -772,6 +772,10 @@ fn ruling_on_an_older_schema_version_is_refused() {
 }
 
 fn narrated_snapshot_body(schema_version: u8, start: u64, end: u64) -> String {
+    narrated_snapshot_body_saying(schema_version, start, end, "Dit is de database.")
+}
+
+fn narrated_snapshot_body_saying(schema_version: u8, start: u64, end: u64, text: &str) -> String {
     format!(
         r##"{{
         "schemaVersion": {schema_version},
@@ -789,11 +793,33 @@ fn narrated_snapshot_body(schema_version: u8, start: u64, end: u64) -> String {
         "narration": {{
             "language": "nl",
             "engine": "test",
-            "segments": [ {{ "start": {start}, "end": {end}, "text": "Dit is de database." }} ]
+            "segments": [ {{ "start": {start}, "end": {end}, "text": "{text}" }} ]
         }}
     }}"##,
         stroke_started = start + 200
     )
+}
+
+/// The one thing Whisper says when nobody did. Dropped after validation, so the
+/// version check still names its real reason, and a sheet left with nothing said
+/// is written plain rather than with an empty timeline.
+#[test]
+fn a_sheet_narrated_with_nothing_but_silence_is_written_plain() {
+    let directory = tempfile::tempdir().unwrap();
+    let (_host_dir, host) = test_host();
+    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
+
+    let refused = save_snapshot(&server, &narrated_snapshot_body_saying(3, 1_000, 3_000, "***"));
+    assert!(refused.starts_with("HTTP/1.1 400 Bad Request"));
+    assert!(refused.contains("narration needs schemaVersion 4"), "{refused}");
+
+    let accepted = save_snapshot(&server, &narrated_snapshot_body_saying(4, 1_000, 3_000, "***"));
+    assert!(accepted.starts_with("HTTP/1.1 200 OK"), "{accepted}");
+    assert!(directory.path().join("latest.json").exists());
+    assert!(!directory.path().join("latest.timeline.md").exists());
+    assert!(!directory.path().join("latest.steps").exists());
+    let written = std::fs::read_to_string(directory.path().join("latest.json")).unwrap();
+    assert!(!written.contains("narration"), "{written}");
 }
 
 #[test]

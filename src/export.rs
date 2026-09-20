@@ -264,7 +264,8 @@ pub fn step_window(snapshot: &DrawingSnapshot, step: &Step) -> Option<Window> {
 ///
 /// A sheet without narration removes any timeline and crops left by an earlier
 /// write under the same stem: the words must never outlive the ink they were
-/// spoken over.
+/// spoken over. Wordless stretches are dropped here, after the upload has been
+/// validated as sent, so a refusal still names the real reason.
 pub fn write_artifacts(
     snapshot: &DrawingSnapshot,
     directory: impl AsRef<Path>,
@@ -272,6 +273,8 @@ pub fn write_artifacts(
     link_prefix: &str,
     updated_at_override: Option<u128>,
 ) -> anyhow::Result<ExportedFiles> {
+    let spoken = snapshot.without_silence();
+    let snapshot = &spoken;
     let directory = directory.as_ref();
     fs::create_dir_all(directory)?;
 
@@ -294,10 +297,7 @@ pub fn write_artifacts(
         Some(updated_at) => updated_at,
         None => SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis(),
     };
-    let narration = snapshot
-        .narration
-        .as_ref()
-        .filter(|narration| !narration.segments.is_empty());
+    let narration = snapshot.narration.as_ref();
     let export_json = ExportJson {
         schema_version: snapshot.schema_version,
         page: snapshot.page.as_ref(),
