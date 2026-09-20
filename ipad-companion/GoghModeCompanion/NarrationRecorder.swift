@@ -147,7 +147,7 @@ final class NarrationRecorder: ObservableObject {
     func start(for pageID: String) async {
         switch state {
         case .idle, .failed: break
-        case .preparingModel, .recording, .transcribing: return
+        case .preparingModel, .loadingModel, .recording, .transcribing: return
         }
 
         self.pageID = pageID

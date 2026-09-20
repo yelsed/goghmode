@@ -354,7 +354,7 @@ struct CanvasView: View {
             keepWhenReady { [recorder] in await recorder.stop() }
         case .idle, .failed:
             Task { [recorder, pageID] in await recorder.start(for: pageID) }
-        case .preparingModel, .transcribing:
+        case .preparingModel, .loadingModel, .transcribing:
             break
         }
     }
