@@ -108,6 +108,24 @@ pub struct DrawingSnapshot {
     pub narration: Option<Narration>,
 }
 
+impl DrawingSnapshot {
+    /// Drops spoken segments that hold no word. Whisper marks a stretch it
+    /// heard nothing in with a run of asterisks or dots; kept, such a segment
+    /// opens a step of its own and is quoted in the timeline as if it had been
+    /// said. A sheet whose narration is nothing but those is not narrated.
+    pub fn drop_wordless_narration(&mut self) {
+        let Some(narration) = self.narration.as_mut() else {
+            return;
+        };
+        narration
+            .segments
+            .retain(|segment| segment.text.chars().any(char::is_alphanumeric));
+        if narration.segments.is_empty() {
+            self.narration = None;
+        }
+    }
+}
+
 pub const CURRENT_SCHEMA_VERSION: u8 = 4;
 
 /// The version that may carry ruling. Named so the validator can say so.

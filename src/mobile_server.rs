@@ -527,7 +527,7 @@ fn handle_authenticated_save(
 
     // Only now is the body interpreted. Hashing is cheap and parsing is not, so
     // an unauthenticated caller must never reach `serde_json`.
-    let snapshot = match serde_json::from_slice::<DrawingSnapshot>(&request.body) {
+    let mut snapshot = match serde_json::from_slice::<DrawingSnapshot>(&request.body) {
         Ok(snapshot) => snapshot,
         Err(error) => {
             respond_to_device(
@@ -544,6 +544,9 @@ fn handle_authenticated_save(
         respond_to_device(stream, &device, 400, "Bad Request", reason);
         return;
     }
+    // After the refusals, so a wordless segment cannot talk its way past a
+    // version check by disappearing first.
+    snapshot.drop_wordless_narration();
 
     match write_page(&snapshot, &context.drawings_dir) {
         Ok(_) => write_response_with_headers(
@@ -843,7 +846,7 @@ fn find_header_end(bytes: &[u8]) -> Option<usize> {
 }
 
 fn handle_save_request(stream: &mut TcpStream, drawings_dir: &Path, body: &[u8]) {
-    let snapshot = match serde_json::from_slice::<DrawingSnapshot>(body) {
+    let mut snapshot = match serde_json::from_slice::<DrawingSnapshot>(body) {
         Ok(snapshot) => snapshot,
         Err(error) => {
             reject_owned(stream, format!("could not parse the drawing: {error}"));
@@ -854,6 +857,7 @@ fn handle_save_request(stream: &mut TcpStream, drawings_dir: &Path, body: &[u8])
         reject_owned(stream, reason);
         return;
     }
+    snapshot.drop_wordless_narration();
 
     match write_page(&snapshot, drawings_dir) {
         Ok(_) => write_response(
