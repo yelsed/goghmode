@@ -5,6 +5,8 @@ mod crypto;
 mod drawing;
 #[path = "../src/export.rs"]
 mod export;
+#[path = "../src/timeline.rs"]
+mod timeline;
 
 #[allow(dead_code)]
 #[path = "../src/host.rs"]
@@ -346,11 +348,15 @@ fn schema_version_one_snapshots_still_save_and_gain_a_legacy_page() {
 fn schema_version_two_snapshots_are_stored_under_their_page_and_mirrored_to_latest() {
     let directory = tempfile::tempdir().unwrap();
     let (_host_dir, host) = test_host();
-    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
+    let server =
+        MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
 
     let response = save_snapshot(
         &server,
-        &snapshot_body(2, r#""page": { "id": "note-1", "title": "Server sketch" },"#),
+        &snapshot_body(
+            2,
+            r#""page": { "id": "note-1", "title": "Server sketch" },"#,
+        ),
     );
 
     assert!(response.starts_with("HTTP/1.1 200 OK"));
@@ -431,13 +437,14 @@ fn schema_version_two_without_a_page_is_refused_rather_than_filed_as_legacy() {
 fn unknown_schema_versions_are_refused_with_a_reason_the_companion_can_read() {
     let directory = tempfile::tempdir().unwrap();
     let (_host_dir, host) = test_host();
-    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
+    let server =
+        MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
 
-    let response = save_snapshot(&server, &snapshot_body(4, ""));
+    let response = save_snapshot(&server, &snapshot_body(5, ""));
 
     assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
-    assert!(response.contains("unsupported schemaVersion 4"));
-    assert!(response.contains("understands 1, 2 and 3"));
+    assert!(response.contains("unsupported schemaVersion 5"));
+    assert!(response.contains("understands 1, 2, 3 and 4"));
     assert!(!directory.path().join("latest.json").exists());
 }
 
@@ -451,9 +458,10 @@ fn capabilities_endpoint_tells_a_companion_which_schema_versions_this_mac_takes(
 
     assert!(response.starts_with("HTTP/1.1 200 OK"));
     assert!(response.contains("application/json"));
-    assert!(response.contains("\"schemaVersions\":[1,2,3]"));
+    assert!(response.contains("\"schemaVersions\":[1,2,3,4]"));
     assert!(response.contains("pages"));
     assert!(response.contains("ruling"));
+    assert!(response.contains("narration"));
 
     let unknown = http_request(server.url(), "GET", &format!("{base_path}capability"));
     assert!(unknown.starts_with("HTTP/1.1 404 Not Found"));
@@ -539,21 +547,29 @@ fn a_pinned_page_keeps_latest_even_when_another_page_is_drawn_on() {
 fn clearing_the_pin_returns_latest_to_following_the_newest_page() {
     let directory = tempfile::tempdir().unwrap();
     let (_host_dir, host) = test_host();
-    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
+    let server =
+        MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
     save_snapshot(&server, &snapshot_body(2, r#""page": { "id": "keeper" },"#));
     post_json(&server, "pin", r#"{"pageId":"keeper"}"#);
 
     post_json(&server, "pin", r#"{"pageId":null}"#);
-    save_snapshot(&server, &snapshot_body(2, r#""page": { "id": "scribble" },"#));
+    save_snapshot(
+        &server,
+        &snapshot_body(2, r#""page": { "id": "scribble" },"#),
+    );
 
-    assert_eq!(latest_page_id(directory.path()).as_deref(), Some("scribble"));
+    assert_eq!(
+        latest_page_id(directory.path()).as_deref(),
+        Some("scribble")
+    );
 }
 
 #[test]
 fn pinning_points_latest_at_that_page_immediately() {
     let directory = tempfile::tempdir().unwrap();
     let (_host_dir, host) = test_host();
-    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
+    let server =
+        MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
     save_snapshot(&server, &snapshot_body(2, r#""page": { "id": "first" },"#));
     save_snapshot(&server, &snapshot_body(2, r#""page": { "id": "second" },"#));
 
@@ -571,8 +587,12 @@ fn pinning_points_latest_at_that_page_immediately() {
 fn promote_sends_one_page_without_moving_the_pin() {
     let directory = tempfile::tempdir().unwrap();
     let (_host_dir, host) = test_host();
-    let server = MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
-    save_snapshot(&server, &snapshot_body(2, r#""page": { "id": "pinned-one" },"#));
+    let server =
+        MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
+    save_snapshot(
+        &server,
+        &snapshot_body(2, r#""page": { "id": "pinned-one" },"#),
+    );
     save_snapshot(&server, &snapshot_body(2, r#""page": { "id": "other" },"#));
     post_json(&server, "pin", r#"{"pageId":"pinned-one"}"#);
 
@@ -587,7 +607,10 @@ fn promote_sends_one_page_without_moving_the_pin() {
     assert_eq!(latest_page_id(directory.path()).as_deref(), Some("other"));
 
     // Drawing on the pinned page is allowed, and that is what ends the override.
-    save_snapshot(&server, &snapshot_body(2, r#""page": { "id": "pinned-one" },"#));
+    save_snapshot(
+        &server,
+        &snapshot_body(2, r#""page": { "id": "pinned-one" },"#),
+    );
     assert_eq!(
         latest_page_id(directory.path()).as_deref(),
         Some("pinned-one")
@@ -667,7 +690,10 @@ fn a_sheet_can_be_pinned_before_the_mac_has_ever_received_it() {
     // And the moment the pinned sheet arrives, it becomes what the agent reads.
     save_snapshot(
         &server,
-        &snapshot_body(2, r#""page": { "id": "not-yet-drawn", "title": "Arrived" },"#),
+        &snapshot_body(
+            2,
+            r#""page": { "id": "not-yet-drawn", "title": "Arrived" },"#,
+        ),
     );
     assert_eq!(
         latest_page_id(directory.path()).as_deref(),
@@ -743,4 +769,82 @@ fn ruling_on_an_older_schema_version_is_refused() {
     assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
     assert!(response.contains("needs schemaVersion 3"));
     assert!(!directory.path().join("latest.json").exists());
+}
+
+fn narrated_snapshot_body(schema_version: u8, start: u64, end: u64) -> String {
+    format!(
+        r##"{{
+        "schemaVersion": {schema_version},
+        "page": {{ "id": "talk" }},
+        "canvas": {{ "width": 200, "height": 200, "background": "#ffffff" }},
+        "strokes": [
+            {{
+                "id": "stroke-1", "color": "#111827", "width": 4, "startedAt": {stroke_started},
+                "points": [
+                    {{ "x": 20, "y": 20, "pressure": 0.5, "t": 0 }},
+                    {{ "x": 60, "y": 60, "pressure": 0.5, "t": 90 }}
+                ]
+            }}
+        ],
+        "narration": {{
+            "language": "nl",
+            "engine": "test",
+            "segments": [ {{ "start": {start}, "end": {end}, "text": "Dit is de database." }} ]
+        }}
+    }}"##,
+        stroke_started = start + 200
+    )
+}
+
+#[test]
+fn narration_needs_schema_version_four_and_says_so() {
+    let directory = tempfile::tempdir().unwrap();
+    let (_host_dir, host) = test_host();
+    let server =
+        MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
+
+    let response = save_snapshot(&server, &narrated_snapshot_body(3, 1_000, 3_000));
+
+    assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
+    assert!(response.contains("narration needs schemaVersion 4"));
+    assert!(!directory.path().join("latest.json").exists());
+}
+
+#[test]
+fn a_narration_segment_that_ends_before_it_starts_is_refused_by_name() {
+    let directory = tempfile::tempdir().unwrap();
+    let (_host_dir, host) = test_host();
+    let server =
+        MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
+
+    let response = save_snapshot(&server, &narrated_snapshot_body(4, 3_000, 1_000));
+
+    assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
+    assert!(response.contains("ends before it starts"));
+}
+
+#[test]
+fn a_narrated_sheet_is_stored_with_its_timeline_and_crops() {
+    let directory = tempfile::tempdir().unwrap();
+    let (_host_dir, host) = test_host();
+    let server =
+        MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
+
+    let response = save_snapshot(&server, &narrated_snapshot_body(4, 1_000, 3_000));
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    assert!(directory.path().join("latest.timeline.md").exists());
+    assert!(directory
+        .path()
+        .join("latest.steps")
+        .join("001.png")
+        .exists());
+    assert!(directory
+        .path()
+        .join("pages")
+        .join("talk")
+        .join("page.timeline.md")
+        .exists());
+    let timeline = std::fs::read_to_string(directory.path().join("latest.timeline.md")).unwrap();
+    assert!(timeline.contains("> Dit is de database."));
 }

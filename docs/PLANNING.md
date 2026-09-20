@@ -118,6 +118,22 @@ the threat model, the protocol, and the ordered sub-phases.
       the repair ("re-pair") when they all die instead of pretending a retry will
       help.
 
+### Phase 6 — Narrated sheets
+Independent of everything above. Decided with the user on 19 September 2026;
+reasoning in [ADR-0008](decisions/0008-narration-is-transcribed-on-the-device.md).
+
+- [x] Schema version 4: `startedAt` per stroke, `narration` on the snapshot,
+      validation with named reasons, capabilities advertising it.
+- [x] Host writes `latest.timeline.md` and `latest.steps/NNN.png` (palette PNG
+      crops with a halo under the new ink), and removes them again for a plain sheet.
+- [x] A second skill, `goghmode-narrated`, installed beside an unchanged `/goghmode`.
+- [ ] iPad: WhisperKit, the record control, WAV kept per sheet, transcription on
+      stop, recovery of a recording the app was killed during, fallback for an
+      older host. Written; needs a device build through CI to verify.
+- [ ] Later: a "narrated" fact in both registers, a language setting, live
+      captions while recording, and the fine-tuning pipeline that reads the kept
+      recordings.
+
 ### Later / unscheduled
 - [ ] Photo and snapshot import, so a phone photo of a paper page enters the same
       bridge.

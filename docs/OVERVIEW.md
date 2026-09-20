@@ -88,6 +88,15 @@ the host approves the device. The long-lived key is derived on both sides rather
 than sent, so nothing secret crosses the network.
 See [ADR-0006](decisions/0006-paired-devices-over-shared-url-token.md).
 
+### 🟡 Narrated sheets
+Say what you mean while you draw it. A button on the open sheet records on the
+iPad, the speech is turned into text on the iPad (WhisperKit; the audio stays on
+the device), and the host writes a timeline beside the sheet: what was said, and a
+small crop of where ink was added while it was said, step by step. In Claude Code,
+`/goghmode-narrated` reads the sheet in the order it was drawn; `/goghmode` is
+unchanged. Host side shipped; iPad side in the same branch, awaiting a device.
+See [ADR-0008](decisions/0008-narration-is-transcribed-on-the-device.md).
+
 ### 🔵 Photo and snapshot import
 Sending an existing photo of a paper page through the same bridge, so the physical
 notebook workflow survives without AirDrop.

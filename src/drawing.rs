@@ -23,6 +23,13 @@ pub struct Stroke {
     pub color: String,
     pub width: f32,
     pub points: Vec<Point>,
+    /// When the stroke began, in unix milliseconds on the drawing device's own
+    /// clock. Absent from clients that predate narration. Points keep their
+    /// per-stroke `t`; this is what lets a stroke be placed next to a spoken
+    /// sentence, because stroke ids are renumbered whenever an earlier stroke
+    /// is erased and cannot anchor anything.
+    #[serde(rename = "startedAt", default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -66,6 +73,27 @@ pub struct PageRef {
     pub title: Option<String>,
 }
 
+/// What was said while the sheet was drawn, transcribed on the drawing device.
+/// The audio never crosses the wire; the device keeps it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Narration {
+    /// BCP 47 tag of the transcription, `nl` for now.
+    pub language: String,
+    /// Which model produced the text, so a transcript can be trusted or redone
+    /// later with knowledge of what made it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<String>,
+    pub segments: Vec<NarrationSegment>,
+}
+
+/// One spoken stretch, on the same clock as `Stroke::started_at`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NarrationSegment {
+    pub start: u64,
+    pub end: u64,
+    pub text: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DrawingSnapshot {
     #[serde(rename = "schemaVersion")]
@@ -75,12 +103,18 @@ pub struct DrawingSnapshot {
     pub page: Option<PageRef>,
     pub canvas: CanvasSize,
     pub strokes: Vec<Stroke>,
+    /// Absent before schema version 4, and absent on a sheet nobody spoke over.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub narration: Option<Narration>,
 }
 
-pub const CURRENT_SCHEMA_VERSION: u8 = 3;
+pub const CURRENT_SCHEMA_VERSION: u8 = 4;
 
 /// The version that may carry ruling. Named so the validator can say so.
 pub const RULED_SCHEMA_VERSION: u8 = 3;
+
+/// The version that may carry narration.
+pub const NARRATED_SCHEMA_VERSION: u8 = 4;
 
 /// The page the desktop canvas owns. Without it the desktop app keeps
 /// overwriting whichever page the iPad sent last.
@@ -156,6 +190,7 @@ impl Drawing {
             color: self.color.clone(),
             width: self.width,
             points: vec![point],
+            started_at: Some(now_ms as u64),
         };
         self.next_id += 1;
         self.active = Some(stroke);
@@ -214,6 +249,7 @@ impl Drawing {
             }),
             canvas: self.canvas.clone(),
             strokes,
+            narration: None,
         }
     }
 

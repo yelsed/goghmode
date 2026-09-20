@@ -47,9 +47,11 @@ This creates:
 
 ```text
 ~/.claude/skills/goghmode/SKILL.md
+~/.claude/skills/goghmode-narrated/SKILL.md
 ```
 
-After that, you can use `/goghmode` in Claude Code.
+After that, you can use `/goghmode` in Claude Code, and `/goghmode-narrated` for a sheet you
+spoke over (see [Narrated sheets](#narrated-sheets)).
 
 ## Copy a sheet to the clipboard
 
@@ -133,6 +135,22 @@ browser companion gets one page per browser.
 
 Pages are kept forever. Nothing deletes them on a timer.
 
+## Narrated sheets
+
+On the iPad, a microphone button on the open sheet records what you say while you draw. The speech
+is turned into text on the iPad itself; the audio stays there. The host then writes, beside the
+usual three files:
+
+```text
+~/Pictures/GoghMode/drawings/latest.timeline.md
+~/Pictures/GoghMode/drawings/latest.steps/001.png, 002.png, ...
+```
+
+The timeline lists each step: what was said, and how many strokes were added where. Each step names
+a small crop of the page showing only the region where ink was added, with that ink on a pale blue
+halo and everything else unchanged. In Claude Code, `/goghmode-narrated` reads the sheet in that
+order. A sheet you did not speak over has none of this, and `/goghmode` reads it exactly as before.
+
 ## The desktop window
 
 The desktop app stopped being a drawing surface. It owns the drawings directory, runs the local
@@ -212,7 +230,7 @@ Quit any already-running GoghMode window, then reopen it.
 - **`/goghmode` is unavailable:** run `goghmode install-skill --target claude`, then restart Claude Code.
 - **The phone cannot open the mobile URL:** keep GoghMode open, keep both devices on the same Wi-Fi, and use the exact URL from the connection chip.
 - **The iPad says the desktop is an older version:** run `cargo install --path . --force` and
-  `goghmode install-app`, then reopen the app. Pages, stamping and ruling each need a host new
+  `goghmode install-app`, then reopen the app. Pages, stamping, ruling and narration each need a host new
   enough to understand them, and the iPad says which one is missing.
 - **`Send to desktop` fails:** keep the desktop app open and reload the phone page from the current mobile URL.
 - **Image paste does not work in an AI interface:** use `/goghmode`, or `goghmode copy` to put the
