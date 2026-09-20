@@ -199,7 +199,11 @@ struct CanvasView: View {
                     }
                 }
 
-                NarrationControl(state: recorder.state, action: toggleNarration)
+                NarrationControl(
+                    state: recorder.state,
+                    recordedBefore: page?.narrationSeconds ?? 0,
+                    action: toggleNarration
+                )
 
                 Button(action: stepBack) {
                     Label("Undo", systemImage: "arrow.uturn.backward")
@@ -305,6 +309,7 @@ struct CanvasView: View {
     private var notice: String? {
         uploader.complaint
             ?? recorder.complaint
+            ?? recorder.hint
             ?? uploader.pagesUnsupportedMessage
             ?? uploader.rulingUnsupportedMessage
             ?? uploader.narrationUnsupportedMessage
@@ -371,16 +376,23 @@ struct CanvasView: View {
     /// gone is a fresh value, not the recorder that was listening or the drawing
     /// that was made — which is also why the upload is built from the store's
     /// copy of the sheet rather than the canvas.
-    private func keepWhenReady(_ words: @escaping @MainActor () async -> [NarrationSegment]) {
+    private func keepWhenReady(
+        _ words: @escaping @MainActor () async -> NarrationRecorder.Recording
+    ) {
         let recorder = self.recorder
         let store = self.store
         let uploader = self.uploader
         let destination = self.destination
         let pageID = self.pageID
         Task { @MainActor in
-            let spoken = await words()
-            guard !spoken.isEmpty else { return }
-            store.appendNarration(spoken, to: pageID, from: recorder.engineName)
+            let recording = await words()
+            guard !recording.segments.isEmpty else { return }
+            store.appendNarration(
+                recording.segments,
+                to: pageID,
+                from: recorder.engineName,
+                recorded: recording.duration
+            )
             if let page = store.page(pageID) {
                 uploader.uploadNow(snapshot: page.snapshot, to: destination)
             }
@@ -630,6 +642,10 @@ struct StatusBadge: View {
 /// bringing a model down does not shift the buttons beside it.
 struct NarrationControl: View {
     let state: NarrationRecorder.State
+    /// How much has already been recorded over this sheet. Shown at rest, so the
+    /// button says there is something here and that a tap adds to it, and counted
+    /// on from while recording, so the clock continues where it left off.
+    let recordedBefore: TimeInterval
     let action: () -> Void
 
     var body: some View {
@@ -660,15 +676,18 @@ struct NarrationControl: View {
             .overlay(alignment: .leading) {
                 switch state {
                 case .idle, .failed:
-                    EmptyView()
+                    if recordedBefore > 0 {
+                        readingText(NarrationControl.clock(recordedBefore))
+                            .fixedSize()
+                    }
                 case .preparingModel(let fraction):
                     readingText("\(Int((fraction * 100).rounded()))%")
                         .fixedSize()
-                case .recording(let since):
-                    elapsed(since: since)
-                case .transcribing:
+                case .loadingModel, .transcribing:
                     ProgressView()
                         .controlSize(.mini)
+                case .recording(let since):
+                    elapsed(since: since)
                 }
             }
     }
@@ -681,8 +700,10 @@ struct NarrationControl: View {
 
     private func elapsed(since start: Date) -> some View {
         TimelineView(.periodic(from: start, by: 1)) { context in
-            readingText(NarrationControl.clock(context.date.timeIntervalSince(start)))
-                .fixedSize()
+            readingText(
+                NarrationControl.clock(recordedBefore + context.date.timeIntervalSince(start))
+            )
+            .fixedSize()
         }
     }
 
@@ -693,9 +714,10 @@ struct NarrationControl: View {
         return String(format: "%02d:%02d", whole / 60, whole % 60)
     }
 
+    /// A filled microphone says the sheet already has words; the tap adds more.
     private var symbol: String {
         switch state {
-        case .idle, .preparingModel: "mic"
+        case .idle, .preparingModel, .loadingModel: recordedBefore > 0 ? "mic.fill" : "mic"
         case .recording: "waveform"
         case .transcribing: "text.bubble"
         case .failed: "mic.slash"
@@ -709,7 +731,7 @@ struct NarrationControl: View {
         switch state {
         case .recording: Sheet.review
         case .failed: Sheet.inkLabel
-        case .idle, .preparingModel, .transcribing: Sheet.onGround
+        case .idle, .preparingModel, .loadingModel, .transcribing: Sheet.onGround
         }
     }
 
@@ -718,17 +740,20 @@ struct NarrationControl: View {
     private var isTappable: Bool {
         switch state {
         case .idle, .recording, .failed: true
-        case .preparingModel, .transcribing: false
+        case .preparingModel, .loadingModel, .transcribing: false
         }
     }
 
     private var spokenLabel: String {
         switch state {
+        case .idle where recordedBefore > 0:
+            "This sheet has \(NarrationControl.clock(recordedBefore)) of narration. Press to add to it."
         case .idle: "Record what you say while you draw"
         case .preparingModel(let fraction):
-            "Getting the transcriber ready, \(Int((fraction * 100).rounded())) per cent"
+            "Downloading the transcriber, \(Int((fraction * 100).rounded())) per cent"
+        case .loadingModel: "Getting the transcriber ready"
         case .recording(let since):
-            "Recording, \(NarrationControl.clock(Date().timeIntervalSince(since))). Press to stop."
+            "Recording, \(NarrationControl.clock(recordedBefore + Date().timeIntervalSince(since))). Press to stop."
         case .transcribing: "Turning what you said into text"
         case .failed: "Recording failed. Press to try again."
         }

@@ -37,7 +37,9 @@ Work through these steps in order. Tell me plainly when a step needs my hands.
    - Open the app. Check in the Mac's Devices view that this iPad is paired; re-pair by QR if not.
    - Open a new sheet. Tap the microphone button in the top bar, between the stamp and undo.
      First time: allow the microphone, then wait while the model downloads (about 626 MB; the
-     button shows the percentage).
+     button shows the percentage) and is prepared for the Neural Engine (a spinner in the button,
+     and the notice line says it takes a few minutes the first time). The button starts counting
+     when it is listening.
    - While recording, in Dutch: say one sentence and draw a group of strokes in the top-left; pause;
      say a second sentence and draw a second group in the centre; pause; say a third sentence and
      draw a third group bottom-right. Then go back into the first group, add one stroke there, and

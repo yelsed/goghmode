@@ -19,6 +19,10 @@ struct NotebookPage: Codable, Equatable, Identifiable {
     /// The transcriber that produced those words, remembered per sheet because a
     /// later model must not be able to claim words an earlier one wrote.
     var narrationEngine: String?
+    /// How long the microphone has been open over this sheet, across every
+    /// recording, so the control can show what is already there and count on
+    /// from it rather than from zero.
+    var narrationSeconds: TimeInterval?
 
     init(
         id: String,
@@ -29,7 +33,8 @@ struct NotebookPage: Codable, Equatable, Identifiable {
         seriesID: String? = nil,
         ruling: SheetRuling? = nil,
         narration: [NarrationSegment]? = nil,
-        narrationEngine: String? = nil
+        narrationEngine: String? = nil,
+        narrationSeconds: TimeInterval? = nil
     ) {
         self.id = id
         self.title = title
@@ -40,6 +45,7 @@ struct NotebookPage: Codable, Equatable, Identifiable {
         self.ruling = ruling
         self.narration = narration
         self.narrationEngine = narrationEngine
+        self.narrationSeconds = narrationSeconds
     }
 
     var drawing: PKDrawing {
@@ -393,11 +399,13 @@ final class PageStore: ObservableObject {
     func appendNarration(
         _ segments: [NarrationSegment],
         to pageID: String,
-        from engine: String? = nil
+        from engine: String? = nil,
+        recorded duration: TimeInterval = 0
     ) {
         guard !segments.isEmpty,
               let index = pages.firstIndex(where: { $0.id == pageID }) else { return }
         pages[index].narration = (pages[index].narration ?? []) + segments
+        pages[index].narrationSeconds = (pages[index].narrationSeconds ?? 0) + max(0, duration)
         if let engine {
             pages[index].narrationEngine = engine
         }

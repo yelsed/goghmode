@@ -323,11 +323,13 @@ final class SheetHistoryTests: XCTestCase {
             first.appendNarration(
                 [NarrationSegment(start: 1_000, end: 2_000, text: "Dit is de database.")],
                 to: pageID,
-                from: "whisperkit/openai_whisper-large-v3-v20240930_626MB"
+                from: "whisperkit/openai_whisper-large-v3-v20240930_626MB",
+                recorded: 60
             )
             first.appendNarration(
                 [NarrationSegment(start: 9_000, end: 9_500, text: "En hier de API.")],
-                to: pageID
+                to: pageID,
+                recorded: 35
             )
         }
 
@@ -341,6 +343,11 @@ final class SheetHistoryTests: XCTestCase {
             "a second recording must not erase which model wrote the first"
         )
         XCTAssertEqual(reopened.page(pageID)?.spokenNarration?.language, "nl")
+        XCTAssertEqual(
+            reopened.page(pageID)?.narrationSeconds,
+            95,
+            "the control counts on from everything recorded so far"
+        )
     }
 
     /// Recordings kept for a sheet nobody can open again are audio with no way to

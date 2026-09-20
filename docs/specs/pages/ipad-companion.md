@@ -183,9 +183,11 @@ Undo, holding one width in every state the way the status chip does:
 
 | State | Shows | Tappable |
 | --- | --- | --- |
-| Idle | `mic` | Yes — starts recording. |
-| Preparing | `mic` and the download percentage in mono | No — the model finishes on its own. |
-| Recording | `waveform` and `mm:ss` elapsed, in review blue | Yes — stops and keeps what was said. |
+| Idle, nothing said yet | `mic` | Yes — starts recording. |
+| Idle, sheet has words | `mic.fill` and the total recorded so far in mono | Yes — records more; the clock counts on from that total. |
+| Downloading | `mic` and the download percentage in mono | No — the model finishes on its own. |
+| Loading | `mic` and a small spinner; the notice line says the first time takes minutes | No. |
+| Recording | `waveform` and `mm:ss` (total so far plus this recording), in review blue | Yes — stops and keeps what was said. |
 | Transcribing | `text.bubble` and a small spinner | No. |
 | Failed | `mic.slash`, quiet | Yes — tries again. The sentence is on the notice line. |
 

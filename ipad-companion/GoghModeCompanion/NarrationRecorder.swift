@@ -11,6 +11,14 @@ import WhisperKit
 /// File-private on purpose: WhisperKit's types stop here, so nothing else in the
 /// app — or in the test target that imports it — has to know the transcriber
 /// exists.
+/// What the model is doing before it can listen, so the control can say which.
+private enum ModelPreparation: Equatable {
+    case downloading(Double)
+    /// Core ML compiling the model for the Neural Engine: minutes the first time,
+    /// seconds after, and nothing to measure in between.
+    case loading
+}
+
 @MainActor
 private final class NarrationModel {
     static let shared = NarrationModel()
@@ -24,13 +32,20 @@ private final class NarrationModel {
     private var loading: Task<WhisperKit, Error>?
     private(set) var variant: String?
 
+    /// Whether the next request is answered at once or has to bring the model up.
+    var isLoaded: Bool {
+        loaded != nil
+    }
+
     /// Named on the wire so a sheet can say what read it back, and so a sheet
     /// transcribed by one model is never credited to a later one.
     var engineName: String? {
         variant.map { "whisperkit/\($0)" }
     }
 
-    func whisperKit(progress: @escaping @Sendable (Double) -> Void) async throws -> WhisperKit {
+    func whisperKit(
+        reporting report: @escaping @Sendable (ModelPreparation) -> Void
+    ) async throws -> WhisperKit {
         if let loaded { return loaded }
         if let loading { return try await loading.value }
 
@@ -41,8 +56,11 @@ private final class NarrationModel {
                 : recommended.default
 
             let folder = try await WhisperKit.download(variant: chosen) { downloading in
-                progress(downloading.fractionCompleted)
+                report(.downloading(downloading.fractionCompleted))
             }
+            // The download is over but the wait is not: a percentage that sits on
+            // 100 reads as stuck, so the control is told this is a different wait.
+            report(.loading)
             // Loads the models itself when it is given a folder, so calling
             // `loadModels()` after this would bring Core ML up a second time.
             let whisperKit = try await WhisperKit(WhisperKitConfig(modelFolder: folder.path))
@@ -67,10 +85,24 @@ private final class NarrationModel {
 final class NarrationRecorder: ObservableObject {
     enum State: Equatable {
         case idle
+        /// Downloading, with how far along.
         case preparingModel(Double)
+        /// Downloaded, and being compiled for the Neural Engine. Minutes the first
+        /// time; there is no fraction to show, so the control shows motion instead.
+        case loadingModel
         case recording(since: Date)
         case transcribing
         case failed(String)
+    }
+
+    /// What one recording produced, and how long the microphone was open for it.
+    /// The duration is what lets the control show a sheet's total and count on
+    /// from it, so a second recording visibly adds to the first.
+    struct Recording: Equatable {
+        var segments: [NarrationSegment]
+        var duration: TimeInterval
+
+        static let nothing = Recording(segments: [], duration: 0)
     }
 
     @Published private(set) var state: State = .idle
@@ -78,6 +110,9 @@ final class NarrationRecorder: ObservableObject {
     /// apart from `state` for the same reason the uploader keeps its complaint
     /// apart from its status: a sentence that blinks out is a sentence nobody reads.
     @Published private(set) var complaint: String?
+    /// A sentence about a wait that is expected, for the sheet's notice line, so
+    /// a button that has stopped moving is not read as a button that is stuck.
+    @Published private(set) var hint: String?
 
     var isRecording: Bool {
         if case .recording = state { return true }
@@ -126,14 +161,25 @@ final class NarrationRecorder: ObservableObject {
         }
 
         state = .preparingModel(0)
+        if !NarrationModel.shared.isLoaded {
+            hint = "Getting the speech model ready. The first time this takes a few minutes; the button starts counting once it is listening."
+        }
         do {
-            let whisperKit = try await NarrationModel.shared.whisperKit { [weak self] fraction in
+            let whisperKit = try await NarrationModel.shared.whisperKit { [weak self] preparation in
                 Task { @MainActor in
-                    guard let self, case .preparingModel = self.state else { return }
-                    self.state = .preparingModel(fraction)
+                    guard let self else { return }
+                    switch (self.state, preparation) {
+                    case (.preparingModel, .downloading(let fraction)):
+                        self.state = .preparingModel(fraction)
+                    case (.preparingModel, .loading), (.loadingModel, .loading):
+                        self.state = .loadingModel
+                    default:
+                        break
+                    }
                 }
             }
             self.whisperKit = whisperKit
+            hint = nil
 
             let startedAt = Date()
             recordingStartedAtMilliseconds = UInt64(max(0, startedAt.timeIntervalSince1970 * 1000))
@@ -158,12 +204,13 @@ final class NarrationRecorder: ObservableObject {
     /// recording is to walk away from the sheet — and a sentence lost to that is
     /// the sentence explaining the drawing.
     @discardableResult
-    func stop() async -> [NarrationSegment] {
-        guard case .recording = state, let whisperKit else { return [] }
+    func stop() async -> Recording {
+        guard case .recording(let since) = state, let whisperKit else { return .nothing }
 
         whisperKit.audioProcessor.stopRecording()
         let recorded = Array(whisperKit.audioProcessor.audioSamples)
         let startedAtMilliseconds = recordingStartedAtMilliseconds
+        let duration = Date().timeIntervalSince(since)
         state = .transcribing
 
         beginBackgroundTask()
@@ -181,10 +228,10 @@ final class NarrationRecorder: ObservableObject {
                 startedAtMilliseconds: startedAtMilliseconds
             )
             state = .idle
-            return spoken
+            return Recording(segments: spoken, duration: duration)
         } catch {
             fail("What you said could not be turned into text: \(error.localizedDescription)")
-            return []
+            return .nothing
         }
     }
 
@@ -192,17 +239,17 @@ final class NarrationRecorder: ObservableObject {
     /// killed, or the sheet was closed while the words were still being read.
     /// Called when a sheet is opened, which is the one moment the result is
     /// certainly wanted.
-    func transcribePendingAudio(for pageID: String) async -> [NarrationSegment] {
-        guard case .idle = state else { return [] }
+    func transcribePendingAudio(for pageID: String) async -> Recording {
+        guard case .idle = state else { return .nothing }
         let pending = NarrationAudioStore.recordingsAwaitingTranscription(for: pageID)
-        guard !pending.isEmpty else { return [] }
+        guard !pending.isEmpty else { return .nothing }
 
         self.pageID = pageID
         state = .transcribing
         beginBackgroundTask()
         defer { endBackgroundTask() }
 
-        var recovered: [NarrationSegment] = []
+        var recovered = Recording.nothing
         do {
             for audioURL in pending {
                 guard let startedAtMilliseconds = UInt64(
@@ -210,10 +257,11 @@ final class NarrationRecorder: ObservableObject {
                 ) else { continue }
 
                 let samples = try AudioProcessor.loadAudioAsFloatArray(fromPath: audioURL.path)
-                recovered += try await transcribe(
+                recovered.segments += try await transcribe(
                     samples,
                     startedAtMilliseconds: startedAtMilliseconds
                 )
+                recovered.duration += Double(samples.count) / Double(WhisperKit.sampleRate)
             }
             state = .idle
         } catch {
@@ -280,8 +328,13 @@ final class NarrationRecorder: ObservableObject {
 
     private func whisperKitForTranscription() async throws -> WhisperKit {
         if let whisperKit { return whisperKit }
-        let loaded = try await NarrationModel.shared.whisperKit { [weak self] fraction in
-            Task { @MainActor in self?.state = .preparingModel(fraction) }
+        let loaded = try await NarrationModel.shared.whisperKit { [weak self] preparation in
+            Task { @MainActor in
+                switch preparation {
+                case .downloading(let fraction): self?.state = .preparingModel(fraction)
+                case .loading: self?.state = .loadingModel
+                }
+            }
         }
         whisperKit = loaded
         state = .transcribing
@@ -342,6 +395,7 @@ final class NarrationRecorder: ObservableObject {
 
     private func fail(_ message: String) {
         audioFile = nil
+        hint = nil
         complaint = message
         state = .failed(message)
     }
