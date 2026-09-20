@@ -7,23 +7,35 @@ spoken segments folded into 5 steps, crops of 739 B to 2.5 KB. The halo sits und
 added in each step, earlier ink keeps its colour and width, and `/goghmode-narrated` read the
 timeline first and then the crops in order. The feature works.
 
-What follows is what the run turned up. The first item is fixed in this branch; the rest is for
+What follows is what the run turned up. Nothing here is fixed: this file is the hand-over to
 whoever picks the branch up next.
 
-## 1. Whisper's silence marker was quoted as if it had been said (fixed here)
+## 1. Whisper's silence marker is quoted as if it had been said
 
 The first step quoted `***`. WhisperKit writes a run of asterisks for a stretch it heard no words
-in, and the host took it for a sentence: it opened a step of its own, and in markdown `> ***`
-renders as a horizontal rule, so the step read as an empty quote.
+in, and the host takes it for a sentence: it opens a step of its own, and in markdown `> ***`
+renders as a horizontal rule, so the step reads as an empty quote.
 
-Fixed by dropping segments that hold no alphanumeric character, after validation and before the
-sheet is written (`DrawingSnapshot::drop_wordless_narration`, called from both upload paths in
-`src/mobile_server.rs`). A sheet whose narration is nothing but such segments is written as an
-unnarrated one, so no stale timeline survives. Two tests in `tests/mobile_server.rs`.
+Evidence from the run, in `latest.json`:
 
-The same filter belongs on the iPad, in the mapping in `NarrationRecorder`, so the words never
-leave the device. It was left out on purpose: those files are being changed right now for the
-interface work, and the host-side filter already protects an older app.
+```json
+{ "start": 1789933346910, "end": 1789933347910, "text": "***" }
+```
+
+and in `latest.timeline.md`:
+
+```markdown
+## Step 1 · 00:00–02:06 · latest.steps/001.png
+> ***
+Drawn: 4 strokes, centre · window x 235–694, y 202–512.
+```
+
+A shape that was tried and then backed out again, kept here as a suggestion rather than a patch:
+drop segments that hold no alphanumeric character, after validation and before the sheet is
+written, so a version refusal still names the real reason; and write a sheet whose narration is
+nothing but such segments as an unnarrated one, so no stale timeline survives. The same filter
+belongs on the iPad, in the mapping in `NarrationRecorder`, so the words never leave the device,
+with the host keeping its own filter for an older app.
 
 ## 2. Recording appears to run while the model is still loading, and a tap throws it away
 

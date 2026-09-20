@@ -823,68 +823,6 @@ fn a_narration_segment_that_ends_before_it_starts_is_refused_by_name() {
     assert!(response.contains("ends before it starts"));
 }
 
-fn snapshot_body_with_a_wordless_segment(first_text: &str) -> String {
-    format!(
-        r##"{{
-        "schemaVersion": 4,
-        "page": {{ "id": "talk" }},
-        "canvas": {{ "width": 200, "height": 200, "background": "#ffffff" }},
-        "strokes": [
-            {{
-                "id": "stroke-1", "color": "#111827", "width": 4, "startedAt": 1200,
-                "points": [
-                    {{ "x": 20, "y": 20, "pressure": 0.5, "t": 0 }},
-                    {{ "x": 60, "y": 60, "pressure": 0.5, "t": 90 }}
-                ]
-            }}
-        ],
-        "narration": {{
-            "language": "nl",
-            "engine": "test",
-            "segments": [
-                {{ "start": 1000, "end": 1100, "text": "{first_text}" }},
-                {{ "start": 1500, "end": 3000, "text": "Dit is de database." }}
-            ]
-        }}
-    }}"##
-    )
-}
-
-#[test]
-fn a_segment_whisper_heard_no_words_in_is_not_kept_or_quoted() {
-    let directory = tempfile::tempdir().unwrap();
-    let (_host_dir, host) = test_host();
-    let server =
-        MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
-
-    let response = save_snapshot(&server, &snapshot_body_with_a_wordless_segment("***"));
-
-    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
-    let stored = std::fs::read_to_string(directory.path().join("latest.json")).unwrap();
-    assert!(!stored.contains("***"), "{stored}");
-    assert!(stored.contains("Dit is de database."));
-    let timeline = std::fs::read_to_string(directory.path().join("latest.timeline.md")).unwrap();
-    assert!(!timeline.contains("> ***"), "{timeline}");
-    assert!(timeline.contains("> Dit is de database."));
-}
-
-#[test]
-fn a_sheet_whose_narration_is_only_silence_is_written_as_an_unnarrated_one() {
-    let directory = tempfile::tempdir().unwrap();
-    let (_host_dir, host) = test_host();
-    let server =
-        MobileServer::start_loopback_with_drawings_dir_for_test(directory.path(), host).unwrap();
-
-    let body = snapshot_body_with_a_wordless_segment("***").replace("Dit is de database.", "...");
-    let response = save_snapshot(&server, &body);
-
-    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
-    let stored = std::fs::read_to_string(directory.path().join("latest.json")).unwrap();
-    assert!(!stored.contains("narration"), "{stored}");
-    assert!(!directory.path().join("latest.timeline.md").exists());
-    assert!(!directory.path().join("latest.steps").exists());
-}
-
 #[test]
 fn a_narrated_sheet_is_stored_with_its_timeline_and_crops() {
     let directory = tempfile::tempdir().unwrap();
