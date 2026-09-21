@@ -110,6 +110,15 @@ word), quotes every sentence, and says how many strokes were added, where on the
 page (`top-left`, `centre`, …) and the window in page units. Crop paths are
 relative to the markdown file, so the same text serves `latest.*` and the page copy.
 
+**Iterating.** `<stem>.steps/steps.json` records, per crop, a key over everything its
+pixels came from (page, ruling, window, every stroke reaching into the window with
+whether it is the step's own ink) and a second key that adds the words. On the next
+write a step whose ink key is unchanged keeps the previous file (hard-linked, or
+copied) instead of being rendered, so a long talk costs its tail; and the timeline's
+header says which steps changed since the previous write of that file and which did
+not, so a reader who saw the earlier timeline opens only those. A first write says
+so. Design: `docs/superpowers/specs/2026-09-20-iterating-on-a-narrated-sheet-design.md`.
+
 **Staleness.** A sheet written without narration removes `<stem>.timeline.md` and
 `<stem>.steps/` under its stem, so the agent can never read yesterday's words
 against today's sketch. Crops are rendered into `<stem>.steps.tmp/` and swapped
@@ -119,7 +128,7 @@ cleared at the start of the next.
 ### Where it lands
 ```text
 drawings/latest.{json,svg,png}                 # the most recently written page
-drawings/latest.timeline.md, latest.steps/     # only when that page was narrated
+drawings/latest.timeline.md, latest.steps/     # only when that page was narrated; steps/ holds steps.json
 drawings/pages/<pageId>/page.{json,svg,png}    # that page's own copy
 drawings/pages/<pageId>/page.timeline.md, page.steps/
 drawings/pages/index.json                      # every page, newest first

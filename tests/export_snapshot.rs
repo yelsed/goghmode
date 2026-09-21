@@ -656,8 +656,89 @@ fn words_without_ink_fold_into_the_step_before_them_and_a_cap_merges_neighbours(
     );
     let windows: Vec<Option<timeline::Window>> =
         capped.iter().map(|step| step_window(&long, step)).collect();
-    let markdown = timeline::markdown(&long, &capped, &windows, "latest");
+    let markdown = timeline::markdown(&long, &capped, &windows, "latest", &timeline::Changes::default());
     assert_eq!(markdown.matches("> zin ").count(), 150);
+}
+
+#[cfg(unix)]
+fn inode(path: &std::path::Path) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    fs::metadata(path).unwrap().ino()
+}
+
+/// A long talk must cost its tail, not its length: a step whose ink did not
+/// change keeps the crop of the previous write, and the timeline says which
+/// steps a reader who saw the last one has to open.
+#[test]
+fn an_unchanged_step_keeps_its_crop_and_the_timeline_names_what_moved() {
+    let temp = tempfile::tempdir().unwrap();
+    let steps_dir = temp.path().join("latest.steps");
+    let timeline_at = || fs::read_to_string(temp.path().join("latest.timeline.md")).unwrap();
+    let first_two = |extra: &[(f32, f32, f32, f32, u64)], spoken: &[(u64, u64, &str)]| {
+        let mut strokes = vec![(20.0, 20.0, 60.0, 60.0, 1_500), (300.0, 300.0, 340.0, 340.0, 5_500)];
+        strokes.extend_from_slice(extra);
+        let mut segments = vec![(1_000, 3_000, "Eerst."), (5_000, 7_000, "Dan.")];
+        segments.extend_from_slice(spoken);
+        narrated_snapshot((400.0, 400.0), &strokes, &segments)
+    };
+
+    write_artifacts(&first_two(&[], &[]), temp.path(), "latest", "drawings/", None).unwrap();
+    assert!(timeline_at().contains("First write of this timeline."));
+    assert!(steps_dir.join("steps.json").exists());
+    #[cfg(unix)]
+    let first_crop = inode(&steps_dir.join("001.png"));
+    #[cfg(unix)]
+    let second_crop = inode(&steps_dir.join("002.png"));
+
+    // A third step far from the first two: only it is rendered and named.
+    let grown = first_two(&[(100.0, 300.0, 140.0, 340.0, 9_500)], &[(9_000, 11_000, "Verder.")]);
+    write_artifacts(&grown, temp.path(), "latest", "drawings/", None).unwrap();
+    let timeline = timeline_at();
+    assert!(timeline.contains("Changed since the previous write of this file: step 3."), "{timeline}");
+    assert!(timeline.contains("Unchanged: steps 1–2."), "{timeline}");
+    assert!(steps_dir.join("003.png").exists());
+    #[cfg(unix)]
+    assert_eq!(inode(&steps_dir.join("001.png")), first_crop, "step 1 was rendered again");
+    #[cfg(unix)]
+    assert_eq!(inode(&steps_dir.join("002.png")), second_crop, "step 2 was rendered again");
+
+    // Only the words of step 2 change: named as changed, crop kept.
+    let reworded = first_two(
+        &[(100.0, 300.0, 140.0, 340.0, 9_500)],
+        &[(9_000, 11_000, "Verder.")],
+    );
+    let mut reworded = reworded;
+    reworded.narration.as_mut().unwrap().segments[1].text = "Dan toch anders.".to_owned();
+    write_artifacts(&reworded, temp.path(), "latest", "drawings/", None).unwrap();
+    let timeline = timeline_at();
+    assert!(timeline.contains("Changed since the previous write of this file: step 2."), "{timeline}");
+    assert!(timeline.contains("Unchanged: steps 1, 3."), "{timeline}");
+    #[cfg(unix)]
+    assert_eq!(inode(&steps_dir.join("002.png")), second_crop, "words alone must not redraw a crop");
+
+    // The first stroke turns red: its own step redraws; the others do not reach it.
+    let mut recoloured = reworded.clone();
+    recoloured.strokes[0].color = "#cc0000".to_owned();
+    write_artifacts(&recoloured, temp.path(), "latest", "drawings/", None).unwrap();
+    let timeline = timeline_at();
+    assert!(timeline.contains("Changed since the previous write of this file: step 1."), "{timeline}");
+    #[cfg(unix)]
+    assert_ne!(inode(&steps_dir.join("001.png")), first_crop);
+    assert_eq!(rgb(&image::open(steps_dir.join("001.png")).unwrap().to_rgba8(), 25, 25), [204, 0, 0]);
+
+    // Back to two steps: nothing new, and the third is said to be gone.
+    write_artifacts(&recoloured_without_third(&recoloured), temp.path(), "latest", "drawings/", None).unwrap();
+    let timeline = timeline_at();
+    assert!(timeline.contains("Nothing new since the previous write of this file."), "{timeline}");
+    assert!(timeline.contains("Step 3 of the previous write no longer exists."), "{timeline}");
+    assert!(!steps_dir.join("003.png").exists());
+}
+
+fn recoloured_without_third(snapshot: &DrawingSnapshot) -> DrawingSnapshot {
+    let mut shorter = snapshot.clone();
+    shorter.strokes.truncate(2);
+    shorter.narration.as_mut().unwrap().segments.truncate(2);
+    shorter
 }
 
 /// Whisper writes `***` for a stretch it heard nothing in. Nobody said that,

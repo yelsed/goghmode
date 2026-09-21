@@ -288,13 +288,13 @@ Documented rather than fixed. Each is a live item in [PLANNING.md](PLANNING.md).
 ## Testing
 
 ```bash
-cargo test                      # 164 Rust tests: 19 unit, 145 across 9 integration files
+cargo test                      # 167 Rust tests: 19 unit, 148 across 9 integration files
 ```
 
 | File | Covers |
 | --- | --- |
 | `tests/mobile_server.rs` | Routes, redirect, 404/405, happy-path save, **multi-packet upload**, 400 with no file written. |
-| `tests/export_snapshot.rs` | JSON/SVG/PNG output, empty drawing, out-of-bounds handling, no `.tmp` residue, raster dimensions; the narrated timeline, the halo under only the new ink, crop scaling, silent segments folding, the step cap, and a plain sheet removing the words. |
+| `tests/export_snapshot.rs` | JSON/SVG/PNG output, empty drawing, out-of-bounds handling, no `.tmp` residue, raster dimensions; the narrated timeline, the halo under only the new ink, crop scaling, silent segments folding, the step cap, a plain sheet removing the words, silence dropped, and unchanged crops kept across writes. |
 | `tests/mobile_web_assets.rs` | Static assertions over `mobile/*` source text — schema version, `fetch("save")`, pointer events, `touch-action: none`, service worker caches shell only. |
 | `tests/app_install.rs` | Mach-O detection, bundle paths, launcher contents, plist keys. |
 | `tests/prompt.rs`, `tests/skill_install.rs` | Prompt/skill wording, both drawings locations, no shell metacharacters; the narrated skill installed beside an unchanged `/goghmode`. |

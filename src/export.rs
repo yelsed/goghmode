@@ -5,10 +5,11 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use image::{Rgba, RgbaImage};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::drawing::{DrawingSnapshot, Narration, PageRef, Point, Ruling, RulingStyle, Stroke};
-use crate::timeline::{self, Step, Window};
+use crate::timeline::{self, Changes, Step, Window};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExportedFiles {
@@ -49,6 +50,25 @@ struct ExportJsonFiles {
 }
 
 const PAPER: Rgba<u8> = Rgba([255, 255, 255, 255]);
+
+/// Beside the crops: what each one was rendered from, so the next write can
+/// keep a crop whose ink did not change and name the steps that did.
+const STEP_MANIFEST: &str = "steps.json";
+
+#[derive(Serialize, Deserialize)]
+struct StepManifest {
+    steps: Vec<StepRecord>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct StepRecord {
+    file: String,
+    /// Everything the crop's pixels depend on. Same key, same picture.
+    ink: String,
+    /// The ink key plus the words, so a step whose sentence changed is named as
+    /// changed even though its crop was kept.
+    content: String,
+}
 
 /// Under the ink added in a step. `stamp-review` from DESIGN.md, lightened
 /// until it reads as marked paper rather than as ink, so the strokes on top of
@@ -319,10 +339,12 @@ pub fn write_artifacts(
         .save_with_format(&png_tmp, image::ImageFormat::Png)?;
     if narration.is_some() {
         let steps = timeline::build_steps(snapshot, timeline::MAX_STEPS);
-        let windows = write_step_crops(snapshot, &steps, &steps_tmp)?;
+        let previous = read_step_manifest(&steps_path);
+        let (windows, changes) =
+            write_step_crops(snapshot, &steps, &steps_tmp, previous.as_ref(), &steps_path)?;
         fs::write(
             &timeline_tmp,
-            timeline::markdown(snapshot, &steps, &windows, stem),
+            timeline::markdown(snapshot, &steps, &windows, stem, &changes),
         )?;
     }
 
@@ -351,28 +373,145 @@ pub fn write_artifacts(
     })
 }
 
-/// Renders every step's crop into `directory`, numbered from `001.png`, and
-/// returns each step's window so the markdown can say where it sits. A step
-/// with no ink gets no crop and a `None`.
+/// Writes every step's crop into `directory`, numbered from `001.png`, plus the
+/// manifest, and returns each step's window so the markdown can say where it
+/// sits, together with what changed against `previous`. A step whose ink key
+/// matches the previous write keeps that write's file instead of being
+/// rendered again, so a long talk costs its tail, not its length. A step with no
+/// ink gets no crop and a `None`.
 fn write_step_crops(
     snapshot: &DrawingSnapshot,
     steps: &[Step],
     directory: &Path,
-) -> anyhow::Result<Vec<Option<Window>>> {
+    previous: Option<&StepManifest>,
+    previous_directory: &Path,
+) -> anyhow::Result<(Vec<Option<Window>>, Changes)> {
     fs::create_dir_all(directory)?;
     let mut drawn_so_far: Vec<usize> = Vec::new();
     let mut windows = Vec::with_capacity(steps.len());
+    let mut records = Vec::with_capacity(steps.len());
+    let mut changes = Changes {
+        previous_steps: previous.map(|manifest| manifest.steps.len()),
+        changed: Vec::new(),
+    };
     for (index, step) in steps.iter().enumerate() {
         drawn_so_far.extend(step.strokes.iter().copied());
-        let Some(window) = step_window(snapshot, step) else {
-            windows.push(None);
-            continue;
-        };
-        let crop = render_step_crop(snapshot, step, &drawn_so_far, &window);
-        write_palette_png(&crop, &directory.join(format!("{:03}.png", index + 1)))?;
-        windows.push(Some(window));
+        let window = step_window(snapshot, step);
+        let ink = ink_key(snapshot, step, &drawn_so_far, window.as_ref());
+        let content = content_key(snapshot, step, &ink);
+        let file = format!("{:03}.png", index + 1);
+        let earlier = previous.and_then(|manifest| manifest.steps.get(index));
+        if !earlier.is_some_and(|record| record.content == content) {
+            changes.changed.push(index);
+        }
+
+        if let Some(window) = window.as_ref() {
+            let target = directory.join(&file);
+            let kept = earlier
+                .filter(|record| record.ink == ink)
+                .is_some_and(|record| keep_crop(&previous_directory.join(&record.file), &target));
+            if !kept {
+                let crop = render_step_crop(snapshot, step, &drawn_so_far, window);
+                write_palette_png(&crop, &target)?;
+            }
+        }
+        windows.push(window);
+        records.push(StepRecord { file, ink, content });
     }
-    Ok(windows)
+    fs::write(
+        directory.join(STEP_MANIFEST),
+        serde_json::to_string_pretty(&StepManifest { steps: records })?,
+    )?;
+    Ok((windows, changes))
+}
+
+fn read_step_manifest(steps_directory: &Path) -> Option<StepManifest> {
+    let text = fs::read_to_string(steps_directory.join(STEP_MANIFEST)).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// A hard link where the filesystem allows one, a copy otherwise. Either way
+/// the crop is not rendered again. False when the earlier file is gone, which
+/// simply means rendering it.
+fn keep_crop(from: &Path, to: &Path) -> bool {
+    fs::hard_link(from, to).is_ok() || fs::copy(from, to).is_ok()
+}
+
+/// Everything a step's crop is drawn from: the page and its ruling, the
+/// window, and every stroke drawn up to that step that reaches into the window,
+/// with whether it is the step's own ink. Strokes elsewhere on the page are
+/// left out, so a stroke added far away does not re-render every earlier step.
+fn ink_key(
+    snapshot: &DrawingSnapshot,
+    step: &Step,
+    drawn_so_far: &[usize],
+    window: Option<&Window>,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(snapshot.canvas.width.to_le_bytes());
+    hasher.update(snapshot.canvas.height.to_le_bytes());
+    match snapshot.canvas.ruling {
+        Some(ruling) => {
+            hasher.update([match ruling.style {
+                RulingStyle::Lines => 1,
+                RulingStyle::Grid => 2,
+                RulingStyle::Dots => 3,
+            }]);
+            hasher.update(ruling.spacing.to_le_bytes());
+        }
+        None => hasher.update([0]),
+    }
+    let Some(window) = window else {
+        hasher.update(b"no ink");
+        return format!("{:x}", hasher.finalize());
+    };
+    for value in [window.x, window.y, window.width, window.height, window.scale] {
+        hasher.update(value.to_le_bytes());
+    }
+
+    let added_now: HashSet<usize> = step.strokes.iter().copied().collect();
+    for &index in drawn_so_far {
+        let stroke = &snapshot.strokes[index];
+        if !stroke_reaches(stroke, window) {
+            continue;
+        }
+        hasher.update([u8::from(added_now.contains(&index))]);
+        hasher.update(stroke.color.as_bytes());
+        hasher.update([0]);
+        hasher.update(stroke.width.to_le_bytes());
+        for point in &stroke.points {
+            hasher.update(point.x.to_le_bytes());
+            hasher.update(point.y.to_le_bytes());
+        }
+        hasher.update(b"|");
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+/// The ink key plus the words, so the timeline can say a step changed when only
+/// its sentence did.
+fn content_key(snapshot: &DrawingSnapshot, step: &Step, ink: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(ink.as_bytes());
+    if let Some(narration) = snapshot.narration.as_ref() {
+        for &segment_index in &step.segments {
+            hasher.update(narration.segments[segment_index].text.as_bytes());
+            hasher.update([0]);
+        }
+    }
+    hasher.update(step.strokes.len().to_le_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+/// Whether any of the stroke, halo included, lands inside the window.
+fn stroke_reaches(stroke: &Stroke, window: &Window) -> bool {
+    let reach = stroke.width / 2.0 + HALO_EXTRA_RADIUS;
+    stroke.points.iter().any(|point| {
+        point.x + reach >= window.x
+            && point.x - reach <= window.x + window.width
+            && point.y + reach >= window.y
+            && point.y - reach <= window.y + window.height
+    })
 }
 
 /// An 8-bit palette PNG: a crop is paper, ruling, halo and a few inks, so a

@@ -150,6 +150,82 @@ fn cap(steps: Vec<Step>, max_steps: usize) -> Vec<Step> {
         .collect()
 }
 
+/// What a write changed against the previous write under the same stem, so a
+/// reader who saw the earlier timeline opens only the steps that moved.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Changes {
+    /// How many steps the previous write had. `None` on a first write.
+    pub previous_steps: Option<usize>,
+    /// Indices of steps whose ink or words differ from the previous write,
+    /// including steps the previous write did not have.
+    pub changed: Vec<usize>,
+}
+
+impl Changes {
+    pub fn describe(&self, steps: usize) -> String {
+        let Some(previous_steps) = self.previous_steps else {
+            return "First write of this timeline.".to_owned();
+        };
+        let unchanged: Vec<usize> = (0..steps).filter(|index| !self.changed.contains(index)).collect();
+        let mut text = if self.changed.is_empty() {
+            if previous_steps == steps {
+                return "Nothing changed since the previous write of this file.".to_owned();
+            }
+            "Nothing new since the previous write of this file.".to_owned()
+        } else {
+            format!(
+                "Changed since the previous write of this file: {}.",
+                step_list(&self.changed)
+            )
+        };
+        if !self.changed.is_empty() && !unchanged.is_empty() {
+            text.push_str(&format!(" Unchanged: {}.", step_list(&unchanged)));
+        }
+        if previous_steps > steps {
+            let gone: Vec<usize> = (steps..previous_steps).collect();
+            text.push_str(&format!(
+                " {} of the previous write no longer exist{}.",
+                capitalised(&step_list(&gone)),
+                if gone.len() == 1 { "s" } else { "" }
+            ));
+        }
+        text
+    }
+}
+
+/// `step 3`, `steps 1–2, 4`: one-based, runs collapsed.
+fn step_list(indices: &[usize]) -> String {
+    let mut runs: Vec<String> = Vec::new();
+    let mut index = 0;
+    while index < indices.len() {
+        let start = indices[index];
+        let mut end = start;
+        while index + 1 < indices.len() && indices[index + 1] == end + 1 {
+            index += 1;
+            end = indices[index];
+        }
+        runs.push(if start == end {
+            format!("{}", start + 1)
+        } else {
+            format!("{}–{}", start + 1, end + 1)
+        });
+        index += 1;
+    }
+    format!(
+        "{} {}",
+        if indices.len() == 1 { "step" } else { "steps" },
+        runs.join(", ")
+    )
+}
+
+fn capitalised(text: &str) -> String {
+    let mut characters = text.chars();
+    match characters.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + characters.as_str(),
+        None => String::new(),
+    }
+}
+
 /// Earliest and latest moment in a step, from its words and its strokes.
 pub fn step_span(snapshot: &DrawingSnapshot, step: &Step) -> Option<(u64, u64)> {
     let narration = snapshot.narration.as_ref()?;
@@ -178,6 +254,7 @@ pub fn markdown(
     steps: &[Step],
     windows: &[Option<Window>],
     stem: &str,
+    changes: &Changes,
 ) -> String {
     let Some(narration) = snapshot.narration.as_ref() else {
         return String::new();
@@ -214,6 +291,7 @@ pub fn markdown(
         number(canvas_width),
         number(canvas_height)
     ));
+    text.push_str(&format!("{}\n\n", changes.describe(steps.len())));
     text.push_str(&format!(
         "The whole page is `{stem}.png`. Each step below names a crop: a window on that page, \
          scaled down, showing only where ink was added during the step. Ink added in the step \

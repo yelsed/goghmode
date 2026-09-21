@@ -127,10 +127,19 @@ reasoning in [ADR-0008](decisions/0008-narration-is-transcribed-on-the-device.md
 - [x] Host writes `latest.timeline.md` and `latest.steps/NNN.png` (palette PNG
       crops with a halo under the new ink), and removes them again for a plain sheet.
 - [x] A second skill, `goghmode-narrated`, installed beside an unchanged `/goghmode`.
-- [ ] iPad: WhisperKit, the record control, WAV kept per sheet, transcription on
+- [x] iPad: WhisperKit, the record control, WAV kept per sheet, transcription on
       stop, recovery of a recording the app was killed during, fallback for an
-      older host. Built and tested on CI, on TestFlight; the on-device check is
-      what remains.
+      older host. First device run on 20 September 2026 worked end to end; what
+      it turned up is in `docs/feedback/2026-09-20-narrated-sheets-device-test.md`
+      and fixed.
+- [x] A tap records at once; the model is fetched while the person talks and asked
+      for when the recording stops. Silence markers are dropped on both sides.
+- [x] Iterating: crops whose ink did not change are kept across writes, and the
+      timeline names the steps that changed since the previous write.
+- [ ] Continue on a copy of a sheet (option B in the iteration design): a
+      register gesture on the iPad, independent of the above.
+- [ ] Retest on device: silence no longer quoted, the tap-records-at-once flow,
+      the region words, and the three edge cases in the test prompt.
 - [ ] Later: a "narrated" fact in both registers, a language setting, live
       captions while recording, and the fine-tuning pipeline that reads the kept
       recordings.

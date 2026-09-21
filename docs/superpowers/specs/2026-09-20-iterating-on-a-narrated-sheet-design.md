@@ -48,6 +48,12 @@ the same conversation opens only the named steps.
 - Cuts what a rereading agent opens, which is the token cost the user feels most.
 - Needs A's manifest and nothing else; without a memory of the previous read it is just a line.
 
+## Decision (21 September 2026)
+
+A and C, on the host, chosen by the user and built: `steps.json` beside the crops, unchanged
+crops hard-linked from the previous write, and a line under the timeline header naming the
+steps that changed. B stays open as the person-facing gesture.
+
 ## Recommendation
 
 **A and C together, on the host, first.** One manifest serves both, no gesture is needed, and the
