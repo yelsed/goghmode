@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::drawing::{CanvasSize, DrawingSnapshot, PageRef, Stroke, LEGACY_PAGE_ID};
+use crate::drawing::{CanvasSize, DrawingSnapshot, Narration, PageRef, Stroke, LEGACY_PAGE_ID};
 use crate::export::{write_artifacts, ExportedFiles};
 
 const PAGES_DIRECTORY: &str = "pages";
@@ -68,6 +68,8 @@ struct StoredPage {
     page: Option<PageRef>,
     canvas: CanvasSize,
     strokes: Vec<Stroke>,
+    #[serde(default)]
+    narration: Option<Narration>,
     #[serde(rename = "updatedAt", default)]
     updated_at: u128,
 }
@@ -79,6 +81,7 @@ impl StoredPage {
             page: self.page,
             canvas: self.canvas,
             strokes: self.strokes,
+            narration: self.narration,
         }
     }
 }
@@ -202,10 +205,19 @@ pub fn set_pin(drawings_dir: impl AsRef<Path>, page_id: Option<&str>) -> anyhow:
 /// judges age from `updatedAt`, so an hours-old sketch was described as if it
 /// had just been sent, and a companion that had quietly stopped uploading still
 /// looked connected.
-pub fn promote_page(drawings_dir: impl AsRef<Path>, page_id: &str) -> anyhow::Result<ExportedFiles> {
+pub fn promote_page(
+    drawings_dir: impl AsRef<Path>,
+    page_id: &str,
+) -> anyhow::Result<ExportedFiles> {
     let drawings_dir = drawings_dir.as_ref();
     let (snapshot, updated_at) = load_page(drawings_dir, page_id)?;
-    write_artifacts(&snapshot, drawings_dir, "latest", "drawings/", Some(updated_at))
+    write_artifacts(
+        &snapshot,
+        drawings_dir,
+        "latest",
+        "drawings/",
+        Some(updated_at),
+    )
 }
 
 /// Rebuilt from the directory rather than maintained incrementally: no drift,

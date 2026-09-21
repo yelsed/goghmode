@@ -9,7 +9,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::crypto::sha256_hex;
 use crate::drawing::{
-    DrawingSnapshot, MAX_RULING_SPACING, MIN_RULING_SPACING, RULED_SCHEMA_VERSION,
+    DrawingSnapshot, MAX_RULING_SPACING, MIN_RULING_SPACING, NARRATED_SCHEMA_VERSION,
+    RULED_SCHEMA_VERSION,
 };
 use crate::host::{unix_millis, Host, PairOutcome, PLATFORM};
 use crate::pages::{page_id_is_safe, write_page};
@@ -26,15 +27,22 @@ const MAX_SAVE_BODY_BYTES: usize = 4 * 1024 * 1024;
 
 /// Version 1 predates pages and keeps working. Bumping the accepted version
 /// rather than widening it would brick every installed companion build.
-const SUPPORTED_SCHEMA_VERSIONS: [u8; 3] = [1, 2, 3];
+const SUPPORTED_SCHEMA_VERSIONS: [u8; 4] = [1, 2, 3, 4];
 
 /// Lets a companion ask what this host understands instead of inferring it
 /// from a rejection. An older host has no such route and answers 404, which is
 /// a usable answer.
 const CAPABILITIES: &[u8] =
-    br#"{"schemaVersions":[1,2,3],"features":["pages","pin","promote","pairing-v2","ruling"]}"#;
+    br#"{"schemaVersions":[1,2,3,4],"features":["pages","pin","promote","pairing-v2","ruling","narration"]}"#;
 
 pub const DEFAULT_PORT: u16 = 8787;
+
+/// Narration is text someone spoke, so the limits are generous for speech and
+/// tight for anything else: half an hour of talking is a few hundred segments.
+const MAX_NARRATION_SEGMENTS: usize = 4096;
+const MAX_NARRATION_SEGMENT_CHARS: usize = 2000;
+const MAX_NARRATION_LANGUAGE_CHARS: usize = 16;
+const MAX_NARRATION_ENGINE_CHARS: usize = 128;
 
 /// The writes that live behind the token prefix. Grouped so one gate covers all
 /// of them: `pin` names the sheet the agent reads, so an anonymous pin chooses
@@ -297,9 +305,7 @@ fn handle_connection(stream: &mut TcpStream, context: &ServerContext, peer: Sock
             match route {
                 LegacyWrite::Save => handle_save_request(stream, drawings_dir, &request.body),
                 LegacyWrite::Pin => handle_pin_request(stream, drawings_dir, &request.body),
-                LegacyWrite::Promote => {
-                    handle_promote_request(stream, drawings_dir, &request.body)
-                }
+                LegacyWrite::Promote => handle_promote_request(stream, drawings_dir, &request.body),
             }
         } else {
             write_response(
@@ -407,7 +413,7 @@ fn handle_hello(stream: &mut TcpStream, context: &ServerContext, request: &HttpR
     let mut body = serde_json::json!({
         "v": PROTOCOL_VERSION,
         "schemaVersions": SUPPORTED_SCHEMA_VERSIONS,
-        "features": ["pages", "pin", "promote", "pairing-v2"],
+        "features": ["pages", "pin", "promote", "pairing-v2", "ruling", "narration"],
         "time": unix_millis().to_string(),
     });
 
@@ -938,7 +944,7 @@ fn handle_promote_request(stream: &mut TcpStream, drawings_dir: &Path, body: &[u
 fn validate_snapshot(snapshot: &DrawingSnapshot) -> Result<(), String> {
     if !SUPPORTED_SCHEMA_VERSIONS.contains(&snapshot.schema_version) {
         return Err(format!(
-            "unsupported schemaVersion {} (this host understands 1, 2 and 3)",
+            "unsupported schemaVersion {} (this host understands 1, 2, 3 and 4)",
             snapshot.schema_version
         ));
     }
@@ -992,6 +998,45 @@ fn validate_snapshot(snapshot: &DrawingSnapshot) -> Result<(), String> {
                 "ruling spacing {} is outside the supported {}-{} range",
                 ruling.spacing, MIN_RULING_SPACING, MAX_RULING_SPACING
             ));
+        }
+    }
+    if let Some(narration) = snapshot.narration.as_ref() {
+        // Same reasoning as ruling: a version says what the payload may hold.
+        if snapshot.schema_version < NARRATED_SCHEMA_VERSION {
+            return Err(format!(
+                "narration needs schemaVersion {NARRATED_SCHEMA_VERSION}, not {}",
+                snapshot.schema_version
+            ));
+        }
+        if narration.language.len() > MAX_NARRATION_LANGUAGE_CHARS {
+            return Err("narration language tag is too long".to_owned());
+        }
+        if narration
+            .engine
+            .as_ref()
+            .is_some_and(|engine| engine.len() > MAX_NARRATION_ENGINE_CHARS)
+        {
+            return Err("narration engine name is too long".to_owned());
+        }
+        if narration.segments.len() > MAX_NARRATION_SEGMENTS {
+            return Err(format!(
+                "{} narration segments exceeds the {MAX_NARRATION_SEGMENTS} limit",
+                narration.segments.len()
+            ));
+        }
+        for segment in &narration.segments {
+            if segment.end < segment.start {
+                return Err(format!(
+                    "narration segment at {} ends before it starts",
+                    segment.start
+                ));
+            }
+            if segment.text.len() > MAX_NARRATION_SEGMENT_CHARS {
+                return Err(format!(
+                    "narration segment at {} is longer than {MAX_NARRATION_SEGMENT_CHARS} chars",
+                    segment.start
+                ));
+            }
         }
     }
     if snapshot.strokes.len() > 4096 {

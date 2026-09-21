@@ -41,7 +41,7 @@ flowchart LR
     B -- "POST /{token}/save" --> S[MobileServer<br/>src/mobile_server.rs]
     C -- "POST /{token}/save" --> S
     S -- validate_snapshot --> E
-    A -- direct call --> E[export::write_snapshot<br/>src/export.rs]
+    A -- direct call --> E[export::write_artifacts<br/>src/export.rs]
     E --> F["drawings/latest.json<br/>drawings/latest.svg<br/>drawings/latest.png"]
     F --> G["/goghmode skill<br/>~/.claude/skills/goghmode/SKILL.md"]
     G --> H[Claude Code]
@@ -69,7 +69,8 @@ through one function.
 | `src/main.rs` | Entry point, clap CLI, module root, drawings-directory resolution, window setup. |
 | `src/app.rs` | `GoghModeApp` — toolbar, canvas input, clipboard actions, status bar. Owns the `MobileServer`. |
 | `src/drawing.rs` | Pure in-memory stroke model: `Point`, `Stroke`, `CanvasSize`, `DrawingSnapshot`, and the `Drawing` mutation API. No I/O, no UI. |
-| `src/export.rs` | Snapshot → SVG string, RGBA raster, JSON; the sheet's ruling drawn under the strokes in both writers; the atomic write of the three `latest.*` files. |
+| `src/export.rs` | Snapshot → SVG string, RGBA raster, JSON; the sheet's ruling drawn under the strokes in both writers; the atomic write of the three `latest.*` files, plus the timeline and palette-PNG step crops of a narrated sheet. |
+| `src/timeline.rs` | A narrated sheet as steps: which strokes were begun while each sentence was the latest thing said, the crop windows, and the markdown the agent reads first. Pure; no I/O. |
 | `src/pages.rs` | One directory per page under `drawings/pages/`, the rebuilt index, the pin, and the `latest.*` mirror. |
 | `src/clipboard.rs` | Reading a written sheet back off disk and putting it on the system clipboard, for `goghmode copy`. |
 | `src/raycast.rs` | The Raycast script command text and its installer. |
@@ -87,19 +88,27 @@ through one function.
 
 ```jsonc
 {
-  "schemaVersion": 2,
+  "schemaVersion": 4,
   "page":    { "id": "9F2C4A1B", "title": "Server sketch" },  // absent at version 1
-  "canvas":  { "width": 1100.0, "height": 699.5, "background": "#ffffff" },
+  "canvas":  { "width": 1100.0, "height": 699.5, "background": "#ffffff",
+               "ruling": { "style": "grid", "spacing": 32.0 } },   // version 3 and up
   "strokes": [
-    { "id": "stroke-1", "color": "#111827", "width": 4.0,
-      "points": [ { "x": 12.5, "y": 40.0, "pressure": 0.5, "t": 1785312000000 } ] }
-  ]
+    { "id": "stroke-1", "color": "#111827", "width": 4.0, "startedAt": 1758290001500,
+      "points": [ { "x": 12.5, "y": 40.0, "pressure": 0.5, "t": 0 } ] }
+  ],
+  "narration": {                                                   // version 4 only
+    "language": "nl", "engine": "whisperkit/openai_whisper-large-v3-v20240930_626MB",
+    "segments": [ { "start": 1758290000000, "end": 1758290003400, "text": "Dit is de database." } ]
+  }
 }
 ```
 
-The server accepts `{1, 2}`. Version 1 has no `page` and is filed under a reserved
-`legacy` page — that is what lets three client implementations move at different
-speeds instead of all at once.
+The server accepts `{1, 2, 3, 4}`. Version 1 has no `page` and is filed under a
+reserved `legacy` page — that is what lets three client implementations move at
+different speeds instead of all at once. A sheet asks for the highest version only
+when it carries the feature that needs it: `3` for ruling, `4` for narration. A
+host that refuses names the version in the reason, and the companion sends the
+sheet again without that feature and says so.
 
 It is mirrored by hand in two other languages:
 
@@ -114,18 +123,23 @@ struct for exactly this reason.
 Two fields carry different meanings per client, deliberately: `t` is epoch
 milliseconds from the web app and a per-stroke monotonic offset from the iPad;
 `pressure` is a real pen reading on iPad, `0.5` everywhere else. Nothing downstream
-depends on `t` being a wall clock.
+depends on `t` being a wall clock. `startedAt` is the clock: unix milliseconds on
+the drawing device for the stroke's first point, the same clock the narration
+segments carry, so the host can interleave the two by sorting. See
+[ADR-0008](decisions/0008-narration-is-transcribed-on-the-device.md).
 
 ## Data flow (reading and writing)
 
 There is no database, no cache, and no read path. Data moves one way:
 
 1. A surface builds a `DrawingSnapshot` from its own in-memory strokes.
-2. Desktop calls `export::write_snapshot` directly; mobile and iPad POST JSON to
+2. Desktop calls `export::write_artifacts` directly; mobile and iPad POST JSON to
    `/{token}/save`, and the server deserializes, validates, then calls the same
    function.
-3. `write_snapshot` writes `latest.json.tmp`, `latest.svg.tmp`, `latest.png.tmp`
-   and renames all three into place.
+3. `write_artifacts` writes `latest.json.tmp`, `latest.svg.tmp`, `latest.png.tmp`
+   and renames all three into place. A narrated sheet also gets
+   `latest.timeline.md` and a `latest.steps/` directory of small crops, written
+   the same way; a plain sheet removes both.
 4. The agent reads the files. Nothing reads them back into the app.
 
 ### Bridge invariants
@@ -133,7 +147,7 @@ There is no database, no cache, and no read path. Data moves one way:
 These four hold today and must keep holding:
 
 1. **The host owns the output directory.** No client writes to it directly.
-2. **Every writer goes through `export::write_snapshot`.** No parallel file format,
+2. **Every writer goes through `export::write_artifacts`.** No parallel file format,
    no second serializer.
 3. **The prompt and skill always point at `drawings/latest.*`.**
 4. **A failed transfer must not corrupt the last good drawing** — hence the
@@ -274,16 +288,16 @@ Documented rather than fixed. Each is a live item in [PLANNING.md](PLANNING.md).
 ## Testing
 
 ```bash
-cargo test                      # 140 Rust tests: 4 unit, 136 across 9 integration files
+cargo test                      # 167 Rust tests: 19 unit, 148 across 9 integration files
 ```
 
 | File | Covers |
 | --- | --- |
 | `tests/mobile_server.rs` | Routes, redirect, 404/405, happy-path save, **multi-packet upload**, 400 with no file written. |
-| `tests/export_snapshot.rs` | JSON/SVG/PNG output, empty drawing, out-of-bounds handling, no `.tmp` residue, raster dimensions. |
+| `tests/export_snapshot.rs` | JSON/SVG/PNG output, empty drawing, out-of-bounds handling, no `.tmp` residue, raster dimensions; the narrated timeline, the halo under only the new ink, crop scaling, silent segments folding, the step cap, a plain sheet removing the words, silence dropped, and unchanged crops kept across writes. |
 | `tests/mobile_web_assets.rs` | Static assertions over `mobile/*` source text — schema version, `fetch("save")`, pointer events, `touch-action: none`, service worker caches shell only. |
 | `tests/app_install.rs` | Mach-O detection, bundle paths, launcher contents, plist keys. |
-| `tests/prompt.rs`, `tests/skill_install.rs` | Prompt/skill wording, both drawings locations, no shell metacharacters. |
+| `tests/prompt.rs`, `tests/skill_install.rs` | Prompt/skill wording, both drawings locations, no shell metacharacters; the narrated skill installed beside an unchanged `/goghmode`. |
 | `tests/app_mobile_url.rs` | Reads `src/app.rs` as text and asserts key UI symbols exist. A stand-in for GUI testing — brittle on purpose. |
 | `tests/copy_latest.rs` | `goghmode copy`: which sheet it reads, the page-id refusal, the age line, and the installed Raycast script. |
 

@@ -31,8 +31,8 @@ Setup until paired, then a `NavigationStack` whose root is the register.
 - **Canvas** (`CanvasView`, pushed) — a full-bleed `PKCanvasView` with the system
   tool palette floating over it. Navigation title is the sheet's name; the back
   button returns to the register. Toolbar: status badge (also retry), stamp control,
-  rename, clear. Leaving the sheet uploads it immediately rather than waiting out the
-  debounce.
+  narration control, rename, clear. Leaving the sheet uploads it immediately
+  rather than waiting out the debounce, and stops any recording running on it.
 - **Keeping the screen awake** — on by default, user-toggleable from the host list,
   and the toggle takes effect the moment it is flipped, not at the next phase
   change. The idle timer is held only while the scene is active: the OS re-arms
@@ -46,10 +46,11 @@ Setup until paired, then a `NavigationStack` whose root is the register.
 | `GoghModeCompanionApp.swift` | `@main`, single `WindowGroup`. |
 | `ContentView.swift` | Pairing gate, the navigation stack, `CanvasView`, `StatusBadge`, `SetupView`. |
 | `RegisterView.swift` | The overview: head rule, ruled index, rows, stamp control, series, previews. |
-| `PageStore.swift` | Local pages and series, persistence, sheet numbering, recorded pin. |
+| `PageStore.swift` | Local pages and series, persistence, sheet numbering, recorded pin, what was said per sheet. |
 | `DrawingSetStyle.swift` | The Drawing Set tokens and the shared drafting primitives. |
 | `PencilCanvasView.swift` | `UIViewRepresentable` around the sheet: ruling behind, `PKCanvasView` and `PKToolPicker` on top. |
 | `DrawingSnapshot.swift` | Codable wire schema and the `PKDrawing` → snapshot conversion. |
+| `NarrationRecorder.swift` | Recording, on-device transcription through WhisperKit, kept audio, crash recovery. |
 | `GoghModeClient.swift` | Endpoint normalization, `URLSession` POST, capabilities, pin/promote, `UploadError`. |
 | `UploadController.swift` | `@MainActor ObservableObject` — debounce, status machine, retry, capability probe. |
 
@@ -108,7 +109,9 @@ the size of the view.
 
 **Networking** — plain `URLSession`, one JSON POST, no chunking. `Info.plist`
 carries `NSAllowsLocalNetworking` and `NSLocalNetworkUsageDescription`, both
-required for plain-HTTP LAN traffic.
+required for plain-HTTP LAN traffic, plus `NSMicrophoneUsageDescription` for
+recording. There is no background audio mode: recording stops when the app
+leaves the foreground, by design.
 
 ## Auth & access
 Two kinds of saved host, and the interface says which is which.
@@ -169,6 +172,70 @@ Conversion from `PKDrawing`:
 - Empty strokes dropped; background hardcoded `#ffffff`.
 - `DrawingSnapshot.empty(canvasSize:)` is what **Clear** posts.
 
+## Narration
+
+What was said while the sheet was drawn, transcribed on the iPad and sent with
+the ink so the host can pair each sentence with the strokes made while it was
+spoken. See [ADR-0008](../../decisions/0008-narration-is-transcribed-on-the-device.md).
+
+**The control.** One button in the open sheet's toolbar, between the stamp and
+Undo, holding one width in every state the way the status chip does:
+
+| State | Shows | Tappable |
+| --- | --- | --- |
+| Idle, nothing said yet | `mic` | Yes — starts recording at once. |
+| Idle, sheet has words | `mic.fill` and the total recorded so far in mono | Yes — records more; the clock counts on from that total. |
+| Recording | `waveform` and `mm:ss` (total so far plus this recording), in review blue. If the model is not ready yet it is fetched in the background and the notice line says so. | Yes — stops and keeps what was said. |
+| Stopped, model downloading | `text.bubble` and the download percentage in mono | No — the words wait for the model. |
+| Stopped, model loading | `text.bubble` and a small spinner; the notice line says the first time takes minutes and nothing is lost | No. |
+| Transcribing | `text.bubble` and a small spinner | No. |
+| Failed | `mic.slash`, quiet | Yes — tries again. The sentence is on the notice line. |
+
+A tap means record now. The first build made the tap wait for the model, which
+took minutes the first time and then began recording on its own once nobody was
+watching; the recorder now listens on its own `AudioProcessor` from the tap and
+asks for the model only when the recording stops. Preparing is therefore never
+shown as a kind of recording, and a tap while the words are being read does
+nothing rather than clearing anything.
+
+Recording belongs to the sheet it was made over. Closing the sheet or
+backgrounding the app stops it, and the transcription runs on under
+`beginBackgroundTask` so walking away does not lose the last sentence.
+
+**On the device.** 16 kHz mono float WAV in
+`Application Support/goghmode-narration/<pageID>/<startedAtMs>.wav`, written
+while the recording runs so a killed app keeps everything said up to that point,
+with a `.json` sidecar of the resulting segments beside it once it has been read.
+Audio is never sent to the host and never deleted with the transcription — it is
+what a model trained on this voice would learn from later. Deleting the sheet
+deletes its recordings.
+
+A WAV with no sidecar was never turned into text. Opening that sheet again
+transcribes it and appends the words, which is the crash-recovery path.
+
+**On the wire.** `Stroke.startedAt` (epoch milliseconds from
+`PKStrokePath.creationDate`) on every stroke at every version — it is the only
+absolute clock a stroke carries, since `t` is an offset inside its own stroke —
+and a `narration` object of `{ language, engine, segments[{ start, end, text }] }`
+on the snapshot, with segment times on the same clock. Several recordings on one
+sheet append. Erasing a stroke does not erase the words that went with it.
+
+A sheet carrying narration asks for **schema version 4**, and only such a sheet
+does, so nothing changes for a sheet nobody spoke over.
+
+**Engine.** WhisperKit from `argmaxinc/argmax-oss-swift`, the only added
+dependency. `openai_whisper-large-v3-v20240930_626MB` where the iPad supports it,
+WhisperKit's own recommendation otherwise; the model comes down once per install
+on first use and is held for the rest of the app run. Language is the constant
+`"nl"`; a setting comes later.
+
+**An older host.** A 400 on a sheet carrying narration is answered by sending the
+sheet without it, remembered per address, and the notice line says the desktop
+app is an older version once. A host that also predates ruling refuses the
+stripped sheet too and ruling comes off on the next attempt, one feature at a
+time, newest first — so a host that only predates narration is never reported as
+one that cannot draw ruling.
+
 ## Client state
 `UploadController` is the state machine for the connection:
 `idle · waiting · saving · saved · failed · wrongHost · needsRepair`. `.failed`
@@ -211,10 +278,11 @@ specific observed failure:
    the active address tracks the Wi-Fi rather than drifting behind it. When every
    address is dead, the state becomes `.needsRepair` — the repair is a re-pair,
    presented as a tappable badge, not an `Offline` that retries into the wall.
-6. **Learning a ruling refusal** — a 400 (or a named rejection) on a sheet that
-   carried ruling means the host predates ruling, so the sheet is re-sent plain
-   and the fact is remembered per address, until the host is forgotten, rather
-   than complained about every stroke.
+6. **Learning a refusal** — a 400 (or a named rejection) on a sheet that carried
+   ruling, or what was said over it, means the host predates that feature. The
+   sheet gives up the newest thing it asks for and is sent again, one feature per
+   attempt, until a plain sheet is left. Each refusal is remembered per address,
+   until the host is forgotten, rather than complained about every stroke.
 
 Errors map to actions, not codes:
 
@@ -241,6 +309,8 @@ Errors map to actions, not codes:
 | Cleared | Canvas reset, clear signal bumped, an empty snapshot posted so the host's files match. Recorded on both sides of the erase, so it is one step back. |
 | Ruled | The sheet carries a ruling; the snapshot goes as schema version 3 and the export carries the rules. |
 | Ruling refused | The host predates ruling, so the sheet is re-sent plain and the notice line says why once. |
+| Narrated | The sheet carries what was said; the snapshot goes as schema version 4 and every stroke carries when it was begun. |
+| Narration refused | The host predates narration, so the sheet is re-sent silent and the notice line says why once. |
 
 The status chip holds one shape in every state: the label and the time are
 reserved at their widest, and the machine name in a repair is reserved at a
@@ -272,6 +342,7 @@ Shipped. Only remaining work is listed.
 | Swipe to delete a sheet | shipped |
 | Zoom and sheet history | shipped |
 | Ruling, per sheet, baked into the export | shipped |
+| Narration recorded and transcribed on the iPad | shipped |
 | QR pairing (Phase 2) | not estimated |
 | Incremental upload (Phase 4) | not estimated |
 | **Total** | — |

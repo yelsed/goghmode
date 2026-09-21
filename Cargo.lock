@@ -1453,6 +1453,7 @@ dependencies = [
  "hmac",
  "home",
  "image",
+ "png",
  "qrcode",
  "serde",
  "serde_json",

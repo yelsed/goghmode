@@ -11,6 +11,7 @@ mod prompt;
 mod protocol;
 mod raycast;
 mod skill;
+mod timeline;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use mobile_server::StartOutcome;
@@ -85,6 +86,10 @@ fn run() -> anyhow::Result<()> {
                 home::home_dir().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
             let path = skill::install_skill(target.into(), &home_dir)?;
             println!("Installed Claude skill at {}", path.display());
+            println!(
+                "Installed Claude skill at {}",
+                skill::narrated_skill_path(target.into(), &home_dir).display()
+            );
             Ok(())
         }
         Some(Command::InstallApp) => {

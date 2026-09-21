@@ -509,3 +509,169 @@ final class SheetPageAndRulingTests: XCTestCase {
         XCTAssertEqual(plain.strokes, ruled.strokes)
     }
 }
+
+/// What was said over a sheet, on the wire. The host reads these keys by name, so
+/// a rename here is a 400 on every save.
+final class NarratedSheetTests: XCTestCase {
+    /// A real moment rather than the epoch, because `startedAt` is the stroke's
+    /// place on the clock and a zero would prove nothing.
+    private static let drawnAt = Date(timeIntervalSince1970: 1_758_290_000)
+
+    private func drawing() -> PKDrawing {
+        let points = [CGPoint(x: 5, y: 5), CGPoint(x: 60, y: 90)].map { location in
+            PKStrokePoint(
+                location: location,
+                timeOffset: 0,
+                size: CGSize(width: 4, height: 4),
+                opacity: 1,
+                force: 0.5,
+                azimuth: 0,
+                altitude: 0
+            )
+        }
+        return PKDrawing(strokes: [
+            PKStroke(
+                ink: PKInk(.pen, color: .black),
+                path: PKStrokePath(controlPoints: points, creationDate: NarratedSheetTests.drawnAt)
+            )
+        ])
+    }
+
+    private func narration() -> Narration {
+        Narration(
+            language: "nl",
+            engine: "whisperkit/openai_whisper-large-v3-v20240930_626MB",
+            segments: [
+                NarrationSegment(
+                    start: 1_758_290_000_000,
+                    end: 1_758_290_003_400,
+                    text: "Dit is de database."
+                )
+            ]
+        )
+    }
+
+    private func encoded(_ snapshot: DrawingSnapshot) throws -> [String: Any] {
+        let data = try JSONEncoder().encode(snapshot)
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    func testNarrationEncodingMatchesRustSchema() throws {
+        let snapshot = DrawingSnapshot.fromPencilDrawing(
+            drawing(),
+            canvasSize: SheetPage.size,
+            narration: narration()
+        )
+
+        let object = try encoded(snapshot)
+        let spoken = try XCTUnwrap(object["narration"] as? [String: Any])
+        let segments = try XCTUnwrap(spoken["segments"] as? [[String: Any]])
+        let first = try XCTUnwrap(segments.first)
+
+        XCTAssertEqual(spoken["language"] as? String, "nl")
+        XCTAssertEqual(
+            spoken["engine"] as? String,
+            "whisperkit/openai_whisper-large-v3-v20240930_626MB"
+        )
+        XCTAssertEqual(first["start"] as? Int, 1_758_290_000_000)
+        XCTAssertEqual(first["end"] as? Int, 1_758_290_003_400)
+        XCTAssertEqual(first["text"] as? String, "Dit is de database.")
+    }
+
+    /// The only absolute clock a stroke carries. Sent at every version, because a
+    /// host that does not know the key ignores it and nothing visible is lost.
+    func testEveryStrokeCarriesWhenItWasBegun() throws {
+        let object = try encoded(
+            DrawingSnapshot.fromPencilDrawing(drawing(), canvasSize: SheetPage.size)
+        )
+        let strokes = try XCTUnwrap(object["strokes"] as? [[String: Any]])
+        let first = try XCTUnwrap(strokes.first)
+
+        XCTAssertEqual(object["schemaVersion"] as? Int, currentSchemaVersion)
+        XCTAssertEqual(
+            first["startedAt"] as? Int,
+            Int(NarratedSheetTests.drawnAt.timeIntervalSince1970 * 1000)
+        )
+    }
+
+    func testANarratedSheetAsksForTheVersionThatCanCarryWords() throws {
+        let snapshot = DrawingSnapshot.fromPencilDrawing(
+            drawing(),
+            canvasSize: SheetPage.size,
+            ruling: SheetRuling(style: .lines),
+            narration: narration()
+        )
+
+        XCTAssertEqual(snapshot.schemaVersion, narratedSchemaVersion)
+    }
+
+    /// Nothing changes for a sheet nobody spoke over, which is the whole point of
+    /// asking for a version only when the sheet carries the feature.
+    func testARuledSheetNobodySpokeOverStillAsksForRulingsVersion() throws {
+        let snapshot = DrawingSnapshot.fromPencilDrawing(
+            drawing(),
+            canvasSize: SheetPage.size,
+            ruling: SheetRuling(style: .grid)
+        )
+
+        XCTAssertEqual(snapshot.schemaVersion, ruledSchemaVersion)
+        XCTAssertNil(snapshot.narration)
+    }
+
+    func testAnEmptyNarrationIsNothingSaidAndDoesNotRaiseTheVersion() throws {
+        let snapshot = DrawingSnapshot.fromPencilDrawing(
+            drawing(),
+            canvasSize: SheetPage.size,
+            narration: Narration(language: "nl", engine: nil, segments: [])
+        )
+
+        XCTAssertEqual(snapshot.schemaVersion, currentSchemaVersion)
+        XCTAssertNil(snapshot.narration)
+    }
+
+    func testDroppingTheWordsFromARuledSheetFallsBackToRulingsVersion() throws {
+        let narrated = DrawingSnapshot.fromPencilDrawing(
+            drawing(),
+            canvasSize: SheetPage.size,
+            ruling: SheetRuling(style: .dots),
+            narration: narration()
+        )
+
+        let silent = narrated.withoutNarration()
+
+        XCTAssertEqual(silent.schemaVersion, ruledSchemaVersion)
+        XCTAssertNil(silent.narration)
+        XCTAssertEqual(silent.canvas.ruling?.style, .dots)
+        XCTAssertEqual(silent.strokes, narrated.strokes)
+    }
+
+    func testDroppingTheWordsFromAPlainSheetFallsBackToTheVersionEveryHostTakes() throws {
+        let narrated = DrawingSnapshot.fromPencilDrawing(
+            drawing(),
+            canvasSize: SheetPage.size,
+            narration: narration()
+        )
+
+        let silent = narrated.withoutNarration()
+        let json = String(decoding: try JSONEncoder().encode(silent), as: UTF8.self)
+
+        XCTAssertEqual(silent.schemaVersion, currentSchemaVersion)
+        XCTAssertFalse(json.contains("narration"), "a sheet sent silent should not mention narration")
+    }
+
+    /// Version 1 predates pages and has no room for words either, so the fallback
+    /// for a host that old takes both off.
+    func testTheFallbackForAHostWithoutPagesAlsoLeavesTheWordsBehind() throws {
+        let narrated = DrawingSnapshot.fromPencilDrawing(
+            drawing(),
+            canvasSize: SheetPage.size,
+            page: PageRef(id: "note-1", title: "Server sketch"),
+            narration: narration()
+        )
+
+        let pageless = narrated.withoutPage()
+
+        XCTAssertEqual(pageless.schemaVersion, pagelessSchemaVersion)
+        XCTAssertNil(pageless.narration)
+    }
+}

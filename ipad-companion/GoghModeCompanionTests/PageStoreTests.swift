@@ -297,6 +297,99 @@ final class SheetHistoryTests: XCTestCase {
         XCTAssertNil(store.page("kept")?.ruling, "a sheet from before ruling is plain")
     }
 
+    /// Same guarantee as ruling, one feature later: a store written before
+    /// narration existed has no such key and must read as a sheet nobody spoke
+    /// over, not fail to decode and take every page with it.
+    func testAStoreWrittenBeforeNarrationStillReads() throws {
+        let written = Date().timeIntervalSince1970
+        let legacy = """
+        {"pages":[{"id":"kept","title":"Older sheet","createdAt":\(written),\
+        "updatedAt":\(written),"drawingData":""}],"series":[]}
+        """
+        try Data(legacy.utf8).write(to: storeURL)
+
+        let store = self.store()
+
+        XCTAssertEqual(store.page("kept")?.title, "Older sheet")
+        XCTAssertNil(store.page("kept")?.narration, "a sheet from before narration was silent")
+        XCTAssertNil(store.page("kept")?.spokenNarration, "nothing said means nothing on the wire")
+    }
+
+    func testWhatWasSaidSurvivesReopeningTheStoreAndSecondRecordingsAppend() throws {
+        let pageID: String
+        do {
+            let first = store()
+            pageID = first.addPage().id
+            first.appendNarration(
+                [NarrationSegment(start: 1_000, end: 2_000, text: "Dit is de database.")],
+                to: pageID,
+                from: "whisperkit/openai_whisper-large-v3-v20240930_626MB",
+                recorded: 60
+            )
+            first.appendNarration(
+                [NarrationSegment(start: 9_000, end: 9_500, text: "En hier de API.")],
+                to: pageID,
+                recorded: 35
+            )
+        }
+
+        let reopened = store()
+        let spoken = try XCTUnwrap(reopened.page(pageID)?.narration)
+
+        XCTAssertEqual(spoken.map(\.text), ["Dit is de database.", "En hier de API."])
+        XCTAssertEqual(
+            reopened.page(pageID)?.spokenNarration?.engine,
+            "whisperkit/openai_whisper-large-v3-v20240930_626MB",
+            "a second recording must not erase which model wrote the first"
+        )
+        XCTAssertEqual(reopened.page(pageID)?.spokenNarration?.language, "nl")
+        XCTAssertEqual(
+            reopened.page(pageID)?.narrationSeconds,
+            95,
+            "the control counts on from everything recorded so far"
+        )
+    }
+
+    /// Recordings kept for a sheet nobody can open again are audio with no way to
+    /// review or remove it.
+    func testDeletingASheetTakesItsRecordingsWithIt() throws {
+        let store = self.store()
+        let pageID = store.addPage().id
+        let audioURL = NarrationAudioStore.audioURL(
+            for: pageID,
+            startedAtMilliseconds: 1_758_290_000_000
+        )
+        try FileManager.default.createDirectory(
+            at: audioURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("RIFF".utf8).write(to: audioURL)
+
+        store.delete(pageID)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: audioURL.path))
+    }
+
+    /// The crash-recovery path: a WAV with no sidecar beside it was never turned
+    /// into text, and is what the sheet picks up the next time it is opened.
+    func testOnlyRecordingsWithoutTheirTextAreWaitingToBeRead() throws {
+        let pageID = "pending-\(UUID().uuidString)"
+        let read = NarrationAudioStore.audioURL(for: pageID, startedAtMilliseconds: 1_000)
+        let unread = NarrationAudioStore.audioURL(for: pageID, startedAtMilliseconds: 2_000)
+        try FileManager.default.createDirectory(
+            at: NarrationAudioStore.directory(for: pageID),
+            withIntermediateDirectories: true
+        )
+        defer { NarrationAudioStore.discardAudio(for: pageID) }
+        try Data("RIFF".utf8).write(to: read)
+        try Data("RIFF".utf8).write(to: unread)
+        try Data("[]".utf8).write(to: NarrationAudioStore.sidecarURL(beside: read))
+
+        let waiting = NarrationAudioStore.recordingsAwaitingTranscription(for: pageID)
+
+        XCTAssertEqual(waiting.map(\.lastPathComponent), ["2000.wav"])
+    }
+
     func testASheetIsPlainUntilARulingIsChosenAndThenRemembersIt() throws {
         let pageID: String
         do {

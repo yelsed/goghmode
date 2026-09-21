@@ -13,6 +13,16 @@ struct NotebookPage: Codable, Equatable, Identifiable {
     /// what every new one still is. Defaulted on decode so a store written by an
     /// older build reads without migration.
     var ruling: SheetRuling?
+    /// What was said while this sheet was drawn, oldest first. `nil` on a sheet
+    /// nobody spoke over, for the same reason `ruling` is.
+    var narration: [NarrationSegment]?
+    /// The transcriber that produced those words, remembered per sheet because a
+    /// later model must not be able to claim words an earlier one wrote.
+    var narrationEngine: String?
+    /// How long the microphone has been open over this sheet, across every
+    /// recording, so the control can show what is already there and count on
+    /// from it rather than from zero.
+    var narrationSeconds: TimeInterval?
 
     init(
         id: String,
@@ -21,7 +31,10 @@ struct NotebookPage: Codable, Equatable, Identifiable {
         updatedAt: Date,
         drawingData: Data,
         seriesID: String? = nil,
-        ruling: SheetRuling? = nil
+        ruling: SheetRuling? = nil,
+        narration: [NarrationSegment]? = nil,
+        narrationEngine: String? = nil,
+        narrationSeconds: TimeInterval? = nil
     ) {
         self.id = id
         self.title = title
@@ -30,6 +43,9 @@ struct NotebookPage: Codable, Equatable, Identifiable {
         self.drawingData = drawingData
         self.seriesID = seriesID
         self.ruling = ruling
+        self.narration = narration
+        self.narrationEngine = narrationEngine
+        self.narrationSeconds = narrationSeconds
     }
 
     var drawing: PKDrawing {
@@ -44,6 +60,13 @@ struct NotebookPage: Codable, Equatable, Identifiable {
         PageRef(id: id, title: title)
     }
 
+    /// What was said, as the wire carries it. `nil` on a sheet nobody spoke over,
+    /// which is what keeps such a sheet on a version every host understands.
+    var spokenNarration: Narration? {
+        guard let narration, !narration.isEmpty else { return nil }
+        return Narration(language: narrationLanguage, engine: narrationEngine, segments: narration)
+    }
+
     /// The sheet as the wire format sees it, for sending a page the canvas does not
     /// currently have open. `fromPencilDrawing` grows the page to cover anything
     /// drawn past it, so a sheet written in landscape before the page had a fixed
@@ -53,9 +76,66 @@ struct NotebookPage: Codable, Equatable, Identifiable {
             drawing,
             canvasSize: SheetPage.size,
             page: pageRef,
-            ruling: ruling
+            ruling: ruling,
+            narration: spokenNarration
         )
     }
+}
+
+/// Where a sheet's recorded speech lives on the iPad: one directory per page, one
+/// WAV per recording, and a JSON sidecar written once that WAV has been turned
+/// into text.
+///
+/// The audio never leaves the device and is never deleted with the transcription.
+/// It is the material a model trained on this voice would learn from later, and
+/// there is nothing to learn from if it is thrown away — only deleting the sheet
+/// takes it.
+enum NarrationAudioStore {
+    static func directory(for pageID: String) -> URL {
+        let root = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first ?? FileManager.default.temporaryDirectory
+        return root
+            .appendingPathComponent("goghmode-narration")
+            .appendingPathComponent(fileNameSafe(pageID))
+    }
+
+    /// Named after the moment the recording started, which is also the offset every
+    /// segment in it is measured from — so a WAV found later carries its own clock.
+    static func audioURL(for pageID: String, startedAtMilliseconds: UInt64) -> URL {
+        directory(for: pageID).appendingPathComponent("\(startedAtMilliseconds).wav")
+    }
+
+    static func sidecarURL(beside audioURL: URL) -> URL {
+        audioURL.deletingPathExtension().appendingPathExtension("json")
+    }
+
+    /// Recordings whose transcription never finished: the app was killed, or the
+    /// sheet was closed mid-sentence. Oldest first, so the words come back in the
+    /// order they were said.
+    static func recordingsAwaitingTranscription(for pageID: String) -> [URL] {
+        let contents = (try? FileManager.default.contentsOfDirectory(
+            at: directory(for: pageID),
+            includingPropertiesForKeys: nil
+        )) ?? []
+
+        return contents
+            .filter { $0.pathExtension == "wav" }
+            .filter { !FileManager.default.fileExists(atPath: sidecarURL(beside: $0).path) }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+    }
+
+    static func discardAudio(for pageID: String) {
+        try? FileManager.default.removeItem(at: directory(for: pageID))
+    }
+}
+
+/// A page id is minted by this app as a UUID string, so it is already safe as a
+/// file name. Percent-encoded anyway, because a name built from stored data is a
+/// path either way.
+private func fileNameSafe(_ pageID: String) -> String {
+    let safe = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+    return pageID.addingPercentEncoding(withAllowedCharacters: safe) ?? "unnamed"
 }
 
 /// A stack, in drawing-set terms: a lettered series of sheets. Series live only
@@ -229,6 +309,9 @@ final class PageStore: ObservableObject {
         guard pages.contains(where: { $0.id == pageID }) else { return }
         pages.removeAll { $0.id == pageID }
         discardTrail(for: pageID)
+        // The recordings go with the sheet. Kept audio for a sheet nobody can
+        // open again is a microphone recording with no way to review or remove it.
+        NarrationAudioStore.discardAudio(for: pageID)
         discardEmptySeries()
         if pages.isEmpty {
             appendPage()
@@ -307,6 +390,26 @@ final class PageStore: ObservableObject {
     func setRuling(_ ruling: SheetRuling?, on pageID: String) {
         guard let index = pages.firstIndex(where: { $0.id == pageID }) else { return }
         pages[index].ruling = ruling
+        save()
+    }
+
+    /// Adds what was just said to what was said before on this sheet. Appended
+    /// rather than replaced: several recordings over one drawing are one running
+    /// commentary, and a second recording must not erase the first.
+    func appendNarration(
+        _ segments: [NarrationSegment],
+        to pageID: String,
+        from engine: String? = nil,
+        recorded duration: TimeInterval = 0
+    ) {
+        guard !segments.isEmpty,
+              let index = pages.firstIndex(where: { $0.id == pageID }) else { return }
+        pages[index].narration = (pages[index].narration ?? []) + segments
+        pages[index].narrationSeconds = (pages[index].narrationSeconds ?? 0) + max(0, duration)
+        if let engine {
+            pages[index].narrationEngine = engine
+        }
+        pages[index].updatedAt = Date()
         save()
     }
 
@@ -520,13 +623,8 @@ final class PageStore: ObservableObject {
         canStepForward = held.cursor + 1 < held.states.count
     }
 
-    /// The page id is minted by this app as a UUID string, so it is already safe as
-    /// a file name. Percent-encoded anyway, because a file name built from stored
-    /// data is a path either way.
     private func trailURL(for pageID: String) -> URL {
-        let safe = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
-        let name = pageID.addingPercentEncoding(withAllowedCharacters: safe) ?? "unnamed"
-        return revisionsURL.appendingPathComponent("\(name).json")
+        revisionsURL.appendingPathComponent("\(fileNameSafe(pageID)).json")
     }
 
     private static func drawing(from data: Data) -> PKDrawing {

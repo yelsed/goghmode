@@ -71,6 +71,10 @@ final class UploadController: ObservableObject {
     /// sent rather than the save failing, because the strokes are what matter.
     @Published private(set) var rulingSupported = true
 
+    /// False once a host has refused a sheet carrying what was said over it. The
+    /// words are dropped rather than the save failing, for the same reason.
+    @Published private(set) var narrationSupported = true
+
     /// Whether the two flags above are an answer or a guess. Until a host has
     /// actually replied they are optimism, and a control drawn on optimism that
     /// disappears the moment it is pressed reads as the app breaking.
@@ -86,6 +90,7 @@ final class UploadController: ObservableObject {
     private var lastDestination: Destination?
     private var capabilitiesByAddress: [String: GoghModeCapabilities] = [:]
     private var addressesThatRefusedRuling: Set<String> = []
+    private var addressesThatRefusedNarration: Set<String> = []
 
     var pagesUnsupportedMessage: String? {
         pagesSupported
@@ -100,6 +105,12 @@ final class UploadController: ObservableObject {
         rulingSupported
             ? nil
             : "GoghMode on the desktop is an older version that cannot draw ruling into the exported page, so your sheets are sent plain. Update it there and reopen it."
+    }
+
+    var narrationUnsupportedMessage: String? {
+        narrationSupported
+            ? nil
+            : "GoghMode on the desktop is an older version that cannot keep what you said while drawing, so your sheets are sent without it. Update it there and reopen it."
     }
 
     static let hostAppOutOfDate =
@@ -190,10 +201,12 @@ final class UploadController: ObservableObject {
     func forgetWhatTheHostAccepts() {
         capabilitiesByAddress.removeAll()
         addressesThatRefusedRuling.removeAll()
+        addressesThatRefusedNarration.removeAll()
         hostIsKnown = false
         pagesSupported = true
         pinningSupported = true
         rulingSupported = true
+        narrationSupported = true
     }
 
     /// Stamps a page as the one the agent reads, or clears the stamp with `nil`.
@@ -325,29 +338,16 @@ final class UploadController: ObservableObject {
     private func upload(_ snapshot: DrawingSnapshot, to destination: Destination) async throws {
         let capabilities = await resolvedCapabilities(for: destination)
         var outgoing = capabilities.supportsPages ? snapshot : snapshot.withoutPage()
+        if addressesThatRefusedNarration.contains(destination.host.address) {
+            outgoing = outgoing.withoutNarration()
+        }
         if addressesThatRefusedRuling.contains(destination.host.address) {
             outgoing = outgoing.withoutRuling()
         }
 
         status = .saving
         do {
-            do {
-                try await deliver(outgoing, to: destination)
-            } catch let error as URLError where error.isWorthRetrying {
-                // URLSession can hand back a pooled socket the host already closed,
-                // which surfaces as `networkConnectionLost` even though the host is
-                // reachable. One retry separates a dead socket from a dead server.
-                try await Task.sleep(for: .milliseconds(300))
-                try await deliver(outgoing, to: destination)
-            } catch let error as UploadError where refusedTheSchema(error, carrying: outgoing) {
-                // Learned from the refusal rather than probed for: a host that
-                // predates ruling has no route that would have answered the question,
-                // and the drawing still has to arrive.
-                addressesThatRefusedRuling.insert(destination.host.address)
-                rulingSupported = false
-                outgoing = outgoing.withoutRuling()
-                try await deliver(outgoing, to: destination)
-            }
+            outgoing = try await deliverLearningWhatIsRefused(outgoing, to: destination)
         } catch {
             // A paired host whose every offered address failed to answer is past
             // retry: the Wi-Fi moved and the address with it, and the repair is
@@ -373,15 +373,61 @@ final class UploadController: ObservableObject {
         status = .saved(Date())
     }
 
-    /// A refusal of a sheet that carried ruling is the one rejection worth
-    /// answering by sending less rather than by complaining.
+    /// Delivers, and answers a refusal by sending less rather than by
+    /// complaining. Each attempt gives up the one newest thing the sheet asks
+    /// for, so a host that predates only the newest feature keeps the rest, and
+    /// the last attempt is the plain sheet every host has always taken.
+    private func deliverLearningWhatIsRefused(
+        _ snapshot: DrawingSnapshot,
+        to destination: Destination
+    ) async throws -> DrawingSnapshot {
+        do {
+            try await deliver(snapshot, to: destination)
+            return snapshot
+        } catch let error as URLError where error.isWorthRetrying {
+            // URLSession can hand back a pooled socket the host already closed,
+            // which surfaces as `networkConnectionLost` even though the host is
+            // reachable. One retry separates a dead socket from a dead server.
+            try await Task.sleep(for: .milliseconds(300))
+            try await deliver(snapshot, to: destination)
+            return snapshot
+        } catch let error as UploadError where refusedTheSchema(error, carrying: snapshot) {
+            // Learned from the refusal rather than probed for: a host that
+            // predates a feature has no route that would have answered the
+            // question, and the drawing still has to arrive.
+            return try await deliverLearningWhatIsRefused(
+                recordRefusal(of: snapshot, by: destination),
+                to: destination
+            )
+        }
+    }
+
+    /// Gives up the newest thing the sheet carries, and remembers that this host
+    /// cannot take it. One at a time, newest first: a host that only predates
+    /// narration must not also be reported as one that cannot draw ruling.
+    private func recordRefusal(
+        of snapshot: DrawingSnapshot,
+        by destination: Destination
+    ) -> DrawingSnapshot {
+        if snapshot.narration != nil {
+            addressesThatRefusedNarration.insert(destination.host.address)
+            narrationSupported = false
+            return snapshot.withoutNarration()
+        }
+        addressesThatRefusedRuling.insert(destination.host.address)
+        rulingSupported = false
+        return snapshot.withoutRuling()
+    }
+
+    /// A refusal of a sheet that carried ruling, or what was said over it, is the
+    /// one rejection worth answering by sending less.
     ///
     /// A paired host names what was wrong, so the reason can be read. The older
-    /// token route returns a bare 400 with nothing to read, and a 400 on a ruled
-    /// sheet is almost always the version it asked for. If it was not, the sheet
-    /// without its ruling fails the same way and gets reported as usual.
+    /// token route returns a bare 400 with nothing to read, and a 400 on such a
+    /// sheet is almost always the version it asked for. If it was not, the
+    /// stripped sheet fails the same way and gets reported as usual.
     private func refusedTheSchema(_ error: UploadError, carrying snapshot: DrawingSnapshot) -> Bool {
-        guard snapshot.canvas.ruling != nil else { return false }
+        guard snapshot.canvas.ruling != nil || snapshot.narration != nil else { return false }
         switch error {
         case .rejected(let reason): return reason.contains("schemaVersion")
         case .serverStatus(let status): return status == 400
