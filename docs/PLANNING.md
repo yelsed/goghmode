@@ -165,3 +165,13 @@ reasoning in [ADR-0008](decisions/0008-narration-is-transcribed-on-the-device.md
 - Bug fixes are not planned here. The three issues from the first round of iPad
   feedback — no eraser, sticky `Offline` status, unhelpful error text — are already
   fixed.
+
+### Phase 7: the sketch hub receiver
+The iPad sends to one centre on paperclip (the dev-portal sketch hub) from anywhere on the
+tailnet, and each machine fetches what was meant for it. This phase is the fetching end,
+`goghmode receive`. Checklist: [phase-7-sketch-hub-receiver](phases/phase-7-sketch-hub-receiver.md).
+
+- [ ] `goghmode receive --hub <url>` writes hub sheets and stamps as a host would (ADR-0010).
+- [ ] HTTPS through `curl` (ADR-0009).
+- [ ] Service files for systemd and launchd.
+- [ ] The iPad sends to the hub (plan 3, its own phase).
