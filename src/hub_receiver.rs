@@ -27,7 +27,7 @@ pub struct InboxItem {
 
 /// What the hub needs back to drop an item: the version fetched, so a newer
 /// upload of the same page that arrived meanwhile stays queued.
-#[derive(Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Confirmation {
     pub id: String,
     pub version: u64,
@@ -76,20 +76,23 @@ pub fn apply_item(item: &InboxItem, drawings_dir: &Path) -> anyhow::Result<ItemO
                     item.id
                 )));
             }
-            if let Some(page_id) = item.page_id.as_deref() {
-                // set_pin promotes a page it finds; one it cannot read would fail every round.
+            if let Err(error) = set_pin(drawings_dir, item.page_id.as_deref()) {
+                // set_pin records the pin, then promotes the page when it has
+                // one. A stored page it cannot read would fail every round, while
+                // the pin itself is kept, as a paired host keeps it.
+                let page_id = item.page_id.as_deref().unwrap_or_default();
                 let stored = crate::pages::page_dir(drawings_dir, page_id)
                     .join(format!("{}.json", crate::pages::PAGE_STEM));
-                if stored.exists() {
-                    if let Err(error) = load_page(drawings_dir, page_id) {
-                        return Ok(ItemOutcome::Rejected(format!(
-                            "{} pins {page_id:?}, which this machine cannot read: {error:#}",
-                            item.id
-                        )));
-                    }
+                if item.page_id.is_none()
+                    || !stored.exists()
+                    || load_page(drawings_dir, page_id).is_ok()
+                {
+                    return Err(error);
                 }
+                return Ok(ItemOutcome::Applied(format!(
+                    "pinned {page_id}; its stored page cannot be read, so latest.* stays: {error:#}"
+                )));
             }
-            set_pin(drawings_dir, item.page_id.as_deref())?;
             Ok(ItemOutcome::Applied(match &item.page_id {
                 Some(page_id) => format!("pinned {page_id}"),
                 None => "cleared the pin".to_owned(),
@@ -199,10 +202,13 @@ fn run_curl(url: &str, timeout: Duration, post_body: Option<&[u8]>) -> anyhow::R
     command
         // --disable must come first: it keeps a user's ~/.curlrc out of the parsing.
         // --fail-with-body needs curl 7.76; the status line works on every curl.
-        // A backlog of large sheets may take longer than the timeout, so the
-        // timeout applies to connecting and to a stalled transfer, not the total.
+        // The hub knows the machine from its tailnet address, so no proxy. A
+        // backlog of large sheets may take longer than the timeout, so the timeout
+        // applies to connecting and to a transfer that has stalled, not the total.
         .args([
             "--disable",
+            "--noproxy",
+            "*",
             "--silent",
             "--show-error",
             "--write-out",
@@ -212,7 +218,7 @@ fn run_curl(url: &str, timeout: Duration, post_body: Option<&[u8]>) -> anyhow::R
             "--connect-timeout",
             &seconds,
             "--speed-limit",
-            "1024",
+            "1",
             "--speed-time",
             &seconds,
         ])
@@ -262,16 +268,36 @@ fn run_curl(url: &str, timeout: Duration, post_body: Option<&[u8]>) -> anyhow::R
 
 /// One round: fetch, apply in order, confirm what was handled. What was
 /// written is reported before confirming, so a failed confirm cannot hide it.
+/// `unconfirmed` carries what was applied but not confirmed into the next
+/// round, which confirms it again without writing it again.
 pub fn receive_once(
     fetch: impl Fn() -> anyhow::Result<Vec<InboxItem>>,
     confirm: impl Fn(&[Confirmation]) -> anyhow::Result<()>,
     drawings_dir: &Path,
+    unconfirmed: &mut Vec<Confirmation>,
     report: &mut impl FnMut(String),
 ) -> anyhow::Result<()> {
     let items = fetch()?;
-    let (confirmations, log) = apply_inbox(&items, drawings_dir);
+    let (already_applied, to_apply): (Vec<InboxItem>, Vec<InboxItem>) =
+        items.into_iter().partition(|item| {
+            unconfirmed.contains(&Confirmation {
+                id: item.id.clone(),
+                version: item.version,
+            })
+        });
+    let (applied, log) = apply_inbox(&to_apply, drawings_dir);
     log.into_iter().for_each(&mut *report);
-    confirm(&confirmations)
+    *unconfirmed = already_applied
+        .into_iter()
+        .map(|item| Confirmation {
+            id: item.id,
+            version: item.version,
+        })
+        .chain(applied)
+        .collect();
+    confirm(unconfirmed)?;
+    unconfirmed.clear();
+    Ok(())
 }
 
 /// Runs until the process is stopped. Every problem is logged and retried
@@ -289,11 +315,13 @@ pub fn run_receiver(
         interval.as_secs()
     );
     let mut last_error = String::new();
+    let mut unconfirmed = Vec::new();
     loop {
         match receive_once(
             || fetch_inbox(hub_url, timeout),
             |confirmations| confirm(hub_url, timeout, confirmations),
             drawings_dir,
+            &mut unconfirmed,
             &mut |line| println!("{line}"),
         ) {
             Ok(()) => last_error.clear(),
@@ -456,6 +484,44 @@ mod tests {
     }
 
     #[test]
+    fn after_a_failed_confirm_the_next_round_confirms_without_writing_again() {
+        let (_root, drawings_dir) = fresh_drawings_dir();
+        let mut unconfirmed = Vec::new();
+        let first = receive_once(
+            || Ok(vec![sheet_item("page-a", 4)]),
+            |_: &[Confirmation]| Err(anyhow::anyhow!("the confirm timed out")),
+            &drawings_dir,
+            &mut unconfirmed,
+            &mut |_| {},
+        );
+        assert!(first.is_err());
+        let written_at = latest_updated_at(&drawings_dir);
+        let confirmed = std::cell::RefCell::new(Vec::new());
+        let mut log = Vec::new();
+        receive_once(
+            || Ok(vec![sheet_item("page-a", 4)]),
+            |confirmations: &[Confirmation]| {
+                confirmed.borrow_mut().extend_from_slice(confirmations);
+                Ok(())
+            },
+            &drawings_dir,
+            &mut unconfirmed,
+            &mut |line| log.push(line),
+        )
+        .unwrap();
+        assert!(log.is_empty(), "written again: {log:?}");
+        assert_eq!(latest_updated_at(&drawings_dir), written_at);
+        assert_eq!(
+            *confirmed.borrow(),
+            vec![Confirmation {
+                id: "sheet-page-a".to_owned(),
+                version: 4
+            }]
+        );
+        assert!(unconfirmed.is_empty());
+    }
+
+    #[test]
     fn receive_once_confirms_what_it_applied() {
         let (_root, drawings_dir) = fresh_drawings_dir();
         let confirmed = std::cell::RefCell::new(Vec::new());
@@ -471,6 +537,7 @@ mod tests {
                 Ok(())
             },
             &drawings_dir,
+            &mut Vec::new(),
             &mut |line| log.push(line),
         )
         .unwrap();
@@ -493,6 +560,7 @@ mod tests {
                 Ok(())
             },
             &drawings_dir,
+            &mut Vec::new(),
             &mut |_| {},
         );
         let error = result.expect_err("a fetch error is reported").to_string();
@@ -508,6 +576,7 @@ mod tests {
             || Ok(vec![sheet_item("page-a", 4)]),
             |_: &[Confirmation]| Err(anyhow::anyhow!("the confirm timed out")),
             &drawings_dir,
+            &mut Vec::new(),
             &mut |line| log.push(line),
         );
         assert!(result.is_err());
@@ -526,7 +595,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pin_of_a_page_this_machine_cannot_read_is_confirmed_and_logged() {
+    fn a_pin_of_a_page_this_machine_cannot_read_is_kept_and_confirmed() {
         let (_root, drawings_dir) = fresh_drawings_dir();
         let page = crate::pages::page_dir(&drawings_dir, "broken");
         std::fs::create_dir_all(&page).unwrap();
@@ -539,6 +608,10 @@ mod tests {
             &drawings_dir,
         );
         assert_eq!(confirmations.len(), 2, "{log:?}");
+        let pinned =
+            std::fs::read_to_string(crate::pages::pages_dir(&drawings_dir).join("pinned.json"))
+                .unwrap();
+        assert!(pinned.contains("broken"), "the pin is kept: {pinned}");
     }
 
     #[test]

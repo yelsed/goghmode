@@ -9,8 +9,11 @@ speaks TLS. ADR-0004 keeps HTTP frameworks, async runtimes and TLS out of the bi
 installs with `cargo install --path .` and ships as one self-contained executable.
 
 ## Decision
-The receiver runs the `curl` command for its two requests (fetch the inbox, confirm it), with
-`--fail-with-body` and `--max-time`, and parses the JSON it prints. `curl` is part of macOS and of
+The receiver runs the `curl` command for its two requests (fetch the inbox, confirm it), and parses
+the JSON it prints. It runs with `--disable` (no `~/.curlrc`) and `--noproxy '*'` (the hub knows the
+machine from its tailnet address), reads the HTTP status from `--write-out` because
+`--fail-with-body` needs curl 7.76, and times out on connecting or on a stalled transfer rather
+than on the total, so a large backlog can finish. `curl` is part of macOS and of
 every Arch install.
 
 ## Consequences

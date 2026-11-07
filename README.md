@@ -243,7 +243,7 @@ The sketch hub in dev-portal on paperclip queues sketches per machine. `goghmode
    launchctl load ~/Library/LaunchAgents/goghmode-receive.plist
    ```
 
-`--interval-seconds` (default 5) sets how often it asks, `--timeout-seconds` (default 20) how long one request may take, and the global `--drawings-dir` where it writes. A sheet the hub sent that is not a valid drawing is logged and confirmed, so it cannot block the queue; a write that fails is retried on the next round, in order.
+`--interval-seconds` (default 5) sets how often it asks, `--timeout-seconds` (default 20) how long connecting may take and how long a transfer may stall without a byte, and the global `--drawings-dir` where it writes. A sheet the hub sent that is not a valid drawing is logged and confirmed, so it cannot block the queue; a write that fails is retried on the next round, in order.
 
 ## Update after code changes
 

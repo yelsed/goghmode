@@ -49,3 +49,17 @@ a stalled transfer, not the total, so a large backlog can finish; the README add
   hub writes every version itself.
 - Minors left: the test hub's request reader could reuse `mobile_server::read_http_request`; a
   promote reads its page twice; the one-second floor is applied in two places.
+
+**Third review, fixed:** a pin of a page whose stored file cannot be read is kept (as a paired host
+keeps it) and only the promote is skipped; after a failed confirm the next round confirms the
+applied items without writing them again; curl ignores proxy variables; the transfer timeout is a
+stall (no byte for the timeout), so no hidden speed floor; README and ADR-0009 describe the flags.
+
+**Third review, not fixed, and why:**
+- *The hub keeps a re-sent page at its old place in the queue, so it can land before a promote
+  that was sent after the first version.* That is the hub's ordering rule (dev-portal
+  `docs/sketch-hub-api.md`), chosen so a pin never comes before its sheet. A fix belongs in the
+  hub, for example a new sequence when a newer version follows a stamp. Follow-up for dev-portal.
+- *A large backlog is held in memory at once and every sheet in it re-renders `latest.*`.* The
+  hub has no paging yet, and its queue limit (200) bounds it. Paging in the hub plus writing
+  `latest.*` once per round is the fix when a machine is off long enough to matter.
