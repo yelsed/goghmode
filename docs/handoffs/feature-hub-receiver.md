@@ -35,3 +35,17 @@ user manager cannot order against.
 - *A sheet that passes `validate_snapshot` but always fails `write_page` blocks the queue.* The
   host has the same gate for `/v2/save`, and telling a disk error from a content error needs
   `export.rs` to classify its errors. Until then a stuck item shows in the journal every round.
+
+**Second review, fixed:** a pin of a page this machine cannot read is confirmed and logged; curl
+runs with `--disable` so a `~/.curlrc` cannot change its output; the timeout covers connecting and
+a stalled transfer, not the total, so a large backlog can finish; the README adds
+`loginctl enable-linger` for a server; the write-failure test skips when run as root.
+
+**Second review, not fixed, and why:**
+- *A hub sheet that waited in the queue can overwrite a newer direct save of the same page.* The
+  receiver cannot tell which is newer: a snapshot carries no time of its own. Once the iPad sends
+  through the hub only (plan 3) there is one route and the order is the hub's.
+- *An inbox item without a numeric version is logged every round.* Only a hub bug makes one; the
+  hub writes every version itself.
+- Minors left: the test hub's request reader could reuse `mobile_server::read_http_request`; a
+  promote reads its page twice; the one-second floor is applied in two places.

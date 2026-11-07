@@ -76,6 +76,19 @@ pub fn apply_item(item: &InboxItem, drawings_dir: &Path) -> anyhow::Result<ItemO
                     item.id
                 )));
             }
+            if let Some(page_id) = item.page_id.as_deref() {
+                // set_pin promotes a page it finds; one it cannot read would fail every round.
+                let stored = crate::pages::page_dir(drawings_dir, page_id)
+                    .join(format!("{}.json", crate::pages::PAGE_STEM));
+                if stored.exists() {
+                    if let Err(error) = load_page(drawings_dir, page_id) {
+                        return Ok(ItemOutcome::Rejected(format!(
+                            "{} pins {page_id:?}, which this machine cannot read: {error:#}",
+                            item.id
+                        )));
+                    }
+                }
+            }
             set_pin(drawings_dir, item.page_id.as_deref())?;
             Ok(ItemOutcome::Applied(match &item.page_id {
                 Some(page_id) => format!("pinned {page_id}"),
@@ -145,12 +158,15 @@ pub fn fetch_inbox(hub_url: &str, timeout: Duration) -> anyhow::Result<Vec<Inbox
 }
 
 /// One item that does not parse must not stop the queue (ADR-0010): it becomes
-/// an item of an unknown kind, which is logged and confirmed with whatever id and
-/// version it carries.
+/// an item of an unknown kind, logged and confirmed with the id and version it
+/// carries. The hub removes only an exact version match, so an item without a
+/// numeric version (only a hub bug makes one) stays queued and is logged again.
 fn read_inbox_item(value: serde_json::Value) -> InboxItem {
-    InboxItem::deserialize(&value).unwrap_or_else(|error| InboxItem {
-        id: value["id"].as_str().unwrap_or_default().to_owned(),
-        version: value["version"].as_u64().unwrap_or_default(),
+    let id = value["id"].as_str().unwrap_or_default().to_owned();
+    let version = value["version"].as_u64().unwrap_or_default();
+    serde_json::from_value(value).unwrap_or_else(|error| InboxItem {
+        id,
+        version,
         kind: format!("unreadable ({error})"),
         page_id: None,
         snapshot: None,
@@ -178,17 +194,28 @@ pub fn confirm(
 /// HTTPS goes through the system's curl (ADR-0009). A refusal carries the
 /// hub's own `{"error": ...}` sentence, which says what to do about it.
 fn run_curl(url: &str, timeout: Duration, post_body: Option<&[u8]>) -> anyhow::Result<Vec<u8>> {
+    let seconds = timeout.as_secs().max(1).to_string();
     let mut command = Command::new("curl");
     command
+        // --disable must come first: it keeps a user's ~/.curlrc out of the parsing.
         // --fail-with-body needs curl 7.76; the status line works on every curl.
+        // A backlog of large sheets may take longer than the timeout, so the
+        // timeout applies to connecting and to a stalled transfer, not the total.
         .args([
+            "--disable",
             "--silent",
             "--show-error",
             "--write-out",
             "\n%{http_code}",
-            "--max-time",
         ])
-        .arg(timeout.as_secs().max(1).to_string())
+        .args([
+            "--connect-timeout",
+            &seconds,
+            "--speed-limit",
+            "1024",
+            "--speed-time",
+            &seconds,
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -412,6 +439,10 @@ mod tests {
         let drawings_dir = root.path().join("drawings");
         std::fs::create_dir_all(&drawings_dir).unwrap();
         std::fs::set_permissions(&drawings_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        if std::fs::write(drawings_dir.join("probe"), "").is_ok() {
+            eprintln!("skipped: a read-only folder is writable here (running as root)");
+            return;
+        }
 
         let items = [
             sheet_item("page-a", 1),
@@ -492,6 +523,22 @@ mod tests {
         );
         assert_eq!(confirmations.len(), 2, "{log:?}");
         assert!(drawings_dir.join("latest.json").exists());
+    }
+
+    #[test]
+    fn a_pin_of_a_page_this_machine_cannot_read_is_confirmed_and_logged() {
+        let (_root, drawings_dir) = fresh_drawings_dir();
+        let page = crate::pages::page_dir(&drawings_dir, "broken");
+        std::fs::create_dir_all(&page).unwrap();
+        std::fs::write(page.join("page.json"), "{ half written").unwrap();
+        let (confirmations, log) = apply_inbox(
+            &[
+                stamp_item("pin", Some("broken"), 1),
+                sheet_item("page-b", 2),
+            ],
+            &drawings_dir,
+        );
+        assert_eq!(confirmations.len(), 2, "{log:?}");
     }
 
     #[test]

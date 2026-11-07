@@ -232,6 +232,7 @@ The sketch hub in dev-portal on paperclip queues sketches per machine. `goghmode
    cp contrib/receiver/goghmode-receive.service ~/.config/systemd/user/
    systemctl --user daemon-reload
    systemctl --user enable --now goghmode-receive.service
+   loginctl enable-linger "$USER"   # keeps it running without a login, on a server
    journalctl --user -u goghmode-receive.service -f
    ```
 
