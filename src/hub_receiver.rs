@@ -2,7 +2,10 @@
 //! for this machine, write it the way a host writes a direct upload, confirm it.
 //! The contract lives in dev-portal's `docs/sketch-hub-api.md`.
 
+use std::io::Write;
 use std::path::Path;
+use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -121,6 +124,133 @@ pub fn apply_inbox(items: &[InboxItem], drawings_dir: &Path) -> (Vec<Confirmatio
         }
     }
     (confirmations, log)
+}
+
+/// Fetches what the hub queued for this machine.
+pub fn fetch_inbox(hub_url: &str, timeout: Duration) -> anyhow::Result<Vec<InboxItem>> {
+    #[derive(Deserialize)]
+    struct Inbox {
+        items: Vec<InboxItem>,
+    }
+    let body = run_curl(&format!("{hub_url}/hub/inbox"), timeout, None)?;
+    let inbox: Inbox = serde_json::from_slice(&body)
+        .map_err(|error| anyhow::anyhow!("the hub's inbox is not the expected JSON: {error}"))?;
+    Ok(inbox.items)
+}
+
+/// Tells the hub what was written; skipped when there is nothing to confirm.
+pub fn confirm(
+    hub_url: &str,
+    timeout: Duration,
+    confirmations: &[Confirmation],
+) -> anyhow::Result<()> {
+    if confirmations.is_empty() {
+        return Ok(());
+    }
+    let body = serde_json::to_vec(&serde_json::json!({ "items": confirmations }))?;
+    run_curl(
+        &format!("{hub_url}/hub/inbox/confirm"),
+        timeout,
+        Some(&body),
+    )?;
+    Ok(())
+}
+
+/// HTTPS goes through the system's curl (ADR-0009). A refusal carries the
+/// hub's own `{"error": ...}` sentence, which says what to do about it.
+fn run_curl(url: &str, timeout: Duration, post_body: Option<&[u8]>) -> anyhow::Result<Vec<u8>> {
+    let mut command = Command::new("curl");
+    command
+        .args(["--silent", "--show-error", "--fail-with-body", "--max-time"])
+        .arg(timeout.as_secs().max(1).to_string())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if post_body.is_some() {
+        command.args([
+            "--request",
+            "POST",
+            "--header",
+            "Content-Type: application/json",
+            "--data-binary",
+            "@-",
+        ]);
+    }
+    command.arg(url);
+    let mut child = command.spawn().map_err(|error| {
+        anyhow::anyhow!("could not run curl, which the receiver needs: {error}")
+    })?;
+    if let Some(body) = post_body {
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(body)?;
+        }
+    } else {
+        drop(child.stdin.take());
+    }
+    let output = child.wait_with_output()?;
+    if output.status.success() {
+        return Ok(output.stdout);
+    }
+    let hub_reason = serde_json::from_slice::<serde_json::Value>(&output.stdout)
+        .ok()
+        .and_then(|answer| answer["error"].as_str().map(str::to_owned));
+    let curl_reason = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    Err(match hub_reason {
+        Some(reason) => anyhow::anyhow!("the hub refused: {reason}"),
+        None => anyhow::anyhow!("could not reach the hub at {url}: {curl_reason}"),
+    })
+}
+
+/// One round: fetch, apply in order, confirm what was handled.
+pub fn receive_once(
+    fetch: impl Fn() -> anyhow::Result<Vec<InboxItem>>,
+    confirm: impl Fn(&[Confirmation]) -> anyhow::Result<()>,
+    drawings_dir: &Path,
+) -> anyhow::Result<Vec<String>> {
+    let items = fetch()?;
+    let (confirmations, log) = apply_inbox(&items, drawings_dir);
+    confirm(&confirmations)?;
+    Ok(log)
+}
+
+/// Runs until the process is stopped. Every problem is logged and retried
+/// after the interval; nothing here ends the loop.
+pub fn run_receiver(
+    hub_url: &str,
+    drawings_dir: &Path,
+    interval: Duration,
+    timeout: Duration,
+) -> ! {
+    let hub_url = hub_url.trim_end_matches('/');
+    println!(
+        "Receiving sketches from {hub_url} into {} every {} s",
+        drawings_dir.display(),
+        interval.as_secs()
+    );
+    let mut last_error = String::new();
+    loop {
+        match receive_once(
+            || fetch_inbox(hub_url, timeout),
+            |confirmations| confirm(hub_url, timeout, confirmations),
+            drawings_dir,
+        ) {
+            Ok(log) => {
+                last_error.clear();
+                for line in log {
+                    println!("{line}");
+                }
+            }
+            Err(error) => {
+                // A hub that keeps refusing would fill the journal once per interval.
+                let message = format!("{error:#}");
+                if message != last_error {
+                    eprintln!("{message}");
+                    last_error = message;
+                }
+            }
+        }
+        std::thread::sleep(interval);
+    }
 }
 
 #[cfg(test)]
@@ -262,5 +392,162 @@ mod tests {
         std::fs::set_permissions(&drawings_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert!(confirmations.is_empty(), "confirmed {confirmations:?}");
         assert_eq!(log.len(), 1, "log: {log:?}");
+    }
+
+    #[test]
+    fn receive_once_confirms_what_it_applied() {
+        let (_root, drawings_dir) = fresh_drawings_dir();
+        let confirmed = std::cell::RefCell::new(Vec::new());
+        let log = receive_once(
+            || Ok(vec![sheet_item("page-a", 4)]),
+            |confirmations: &[Confirmation]| {
+                confirmed.borrow_mut().extend(
+                    confirmations
+                        .iter()
+                        .map(|confirmation| (confirmation.id.clone(), confirmation.version)),
+                );
+                Ok(())
+            },
+            &drawings_dir,
+        )
+        .unwrap();
+        assert_eq!(*confirmed.borrow(), vec![("sheet-page-a".to_owned(), 4)]);
+        assert_eq!(log.len(), 1);
+    }
+
+    #[test]
+    fn receive_once_reports_a_fetch_error_and_confirms_nothing() {
+        let (_root, drawings_dir) = fresh_drawings_dir();
+        let confirm_called = std::cell::Cell::new(false);
+        let result = receive_once(
+            || {
+                Err(anyhow::anyhow!(
+                    "paperclip is not allowed on the sketch hub"
+                ))
+            },
+            |_: &[Confirmation]| {
+                confirm_called.set(true);
+                Ok(())
+            },
+            &drawings_dir,
+        );
+        let error = result.err().expect("a fetch error is reported").to_string();
+        assert!(error.contains("not allowed"), "{error}");
+        assert!(!confirm_called.get());
+    }
+
+    /// Answers one HTTP request with the given status and body, and hands back
+    /// the request it received.
+    fn one_shot_hub(status_line: &str, body: &str) -> (String, std::thread::JoinHandle<String>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let response = format!(
+            "HTTP/1.1 {status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_millis(500)))
+                .unwrap();
+            let mut received = Vec::new();
+            let mut buffer = [0u8; 4096];
+            loop {
+                match stream.read(&mut buffer) {
+                    Ok(0) | Err(_) => break,
+                    Ok(count) => {
+                        received.extend_from_slice(&buffer[..count]);
+                        let text = String::from_utf8_lossy(&received);
+                        if let Some(header_end) = text.find("\r\n\r\n") {
+                            let length = text[..header_end]
+                                .lines()
+                                .find_map(|line| {
+                                    line.to_ascii_lowercase()
+                                        .strip_prefix("content-length:")
+                                        .map(|value| value.trim().parse::<usize>().unwrap_or(0))
+                                })
+                                .unwrap_or(0);
+                            if received.len() >= header_end + 4 + length {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            stream.write_all(response.as_bytes()).unwrap();
+            String::from_utf8_lossy(&received).into_owned()
+        });
+        (url, handle)
+    }
+
+    fn curl_is_installed() -> bool {
+        std::process::Command::new("curl")
+            .arg("--version")
+            .output()
+            .is_ok()
+    }
+
+    #[test]
+    fn fetch_inbox_reads_items_from_a_hub() {
+        if !curl_is_installed() {
+            eprintln!("skipped: curl is not installed");
+            return;
+        }
+        let (url, hub) = one_shot_hub(
+            "200 OK",
+            r#"{"items":[{"id":"stamp-3","sequence":3,"version":3,"kind":"pin","pageId":null}]}"#,
+        );
+        let items = fetch_inbox(&url, std::time::Duration::from_secs(5)).unwrap();
+        let request = hub.join().unwrap();
+        assert!(request.starts_with("GET /hub/inbox "), "{request}");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, "stamp-3");
+        assert_eq!(items[0].page_id, None);
+    }
+
+    #[test]
+    fn fetch_inbox_carries_the_hubs_reason_on_403() {
+        if !curl_is_installed() {
+            eprintln!("skipped: curl is not installed");
+            return;
+        }
+        let (url, hub) = one_shot_hub(
+            "403 Forbidden",
+            r#"{"error":"paperclip is not allowed on the sketch hub; allow it on the dev-portal page"}"#,
+        );
+        let error = fetch_inbox(&url, std::time::Duration::from_secs(5))
+            .err()
+            .expect("a 403 is an error")
+            .to_string();
+        hub.join().unwrap();
+        assert!(
+            error.contains("paperclip is not allowed on the sketch hub"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn confirm_posts_the_items_with_their_versions() {
+        if !curl_is_installed() {
+            eprintln!("skipped: curl is not installed");
+            return;
+        }
+        let (url, hub) = one_shot_hub("200 OK", r#"{"removed":1}"#);
+        confirm(
+            &url,
+            std::time::Duration::from_secs(5),
+            &[Confirmation {
+                id: "sheet-page-a".to_owned(),
+                version: 12,
+            }],
+        )
+        .unwrap();
+        let request = hub.join().unwrap();
+        assert!(request.starts_with("POST /hub/inbox/confirm "), "{request}");
+        assert!(
+            request.contains(r#"{"items":[{"id":"sheet-page-a","version":12}]}"#),
+            "{request}"
+        );
     }
 }
