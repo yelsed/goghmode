@@ -17,17 +17,17 @@ and moves to `master` with it. After the build, goghmode is installed on papercl
 
 ## Checklist (each line is proven by a test)
 
-- [ ] A sheet from the hub is written as `latest.*`, exactly as `/v2/save` would write it, into a
+- [x] A sheet from the hub is written as `latest.*`, exactly as `/v2/save` would write it, into a
       drawings directory that is created when missing.
-- [ ] A pin that arrives in the same fetch as the sheet it names points `latest.*` at that page.
-- [ ] A sheet that can never be written (unsupported schema, unsafe page id, unknown kind) is
+- [x] A pin that arrives in the same fetch as the sheet it names points `latest.*` at that page.
+- [x] A sheet that can never be written (unsupported schema, unsafe page id, unknown kind) is
       confirmed and logged, so it cannot block the queue.
-- [ ] A write failure stops before later items, confirms nothing from that item on, and they come
+- [x] A write failure stops before later items, confirms nothing from that item on, and they come
       again in order.
-- [ ] Fetching and confirming go through `curl`; a 403 or 503 from the hub becomes one log line
+- [x] Fetching and confirming go through `curl`; a 403 or 503 from the hub becomes one log line
       carrying the hub's own reason, and the receiver tries again after the interval.
-- [ ] `goghmode receive` needs `--hub`; the interval (5 s) and the timeout (20 s) are flags.
-- [ ] Service files for systemd (paperclip, omarchy) and launchd (MacBook) run it at login.
+- [x] `goghmode receive` needs `--hub`; the interval (5 s) and the timeout (20 s) are flags.
+- [x] Service files for systemd (paperclip, omarchy) and launchd (MacBook) run it at login.
 
 ## Not in this phase
 
