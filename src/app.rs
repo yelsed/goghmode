@@ -65,7 +65,11 @@ const SET: Sheet = Sheet {
 /// A section on paper with a ruled label above it, per DESIGN.md's
 /// `title-block` and `block-label`. Loose rows lying directly on the ground is
 /// what made the devices panel read as a debug dump.
-fn paper_block<R>(ui: &mut egui::Ui, label: &str, contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
+fn paper_block<R>(
+    ui: &mut egui::Ui,
+    label: &str,
+    contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
     ui.label(
         RichText::new(label.to_uppercase())
             .size(10.0)
@@ -85,6 +89,7 @@ fn paper_block<R>(ui: &mut egui::Ui, label: &str, contents: impl FnOnce(&mut egu
 fn sheet() -> &'static Sheet {
     &SET
 }
+
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum View {
@@ -115,11 +120,14 @@ pub struct GoghModeApp {
 }
 
 impl GoghModeApp {
-    pub fn new(drawings_dir: PathBuf, host: Host, goghmode_dir: PathBuf, bridge: Bridge) -> Self {
+    pub fn new(
+        drawings_dir: PathBuf,
+        host: Host,
+        goghmode_dir: PathBuf,
+        bridge: Bridge,
+    ) -> Self {
         let status = match &bridge {
-            Bridge::Serving(_) => {
-                "Draw on a paired device. The stamped sheet is what /goghmode reads.".to_owned()
-            }
+            Bridge::Serving(_) => "Draw on a paired device. The stamped sheet is what /goghmode reads.".to_owned(),
             Bridge::Unavailable(reason) => reason.clone(),
         };
 
@@ -227,6 +235,7 @@ impl GoghModeApp {
         self.thumbnails.insert(key, handle.clone());
         Some(handle)
     }
+
 }
 
 impl eframe::App for GoghModeApp {
@@ -237,6 +246,7 @@ impl eframe::App for GoghModeApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         sheet().ground.to_normalized_gamma_f32()
     }
+
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         ui.spacing_mut().item_spacing = Vec2::new(BLOCK, BLOCK);
@@ -251,6 +261,7 @@ impl eframe::App for GoghModeApp {
 
 impl GoghModeApp {
     fn draw_window(&mut self, ui: &mut egui::Ui) {
+
         self.draw_header(ui);
         ui.add_space(GUTTER);
 
@@ -294,12 +305,7 @@ impl GoghModeApp {
             .inner_margin(egui::Margin::symmetric(16, 12))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("GoghMode")
-                            .size(20.0)
-                            .strong()
-                            .color(sheet.ink),
-                    );
+                    ui.label(RichText::new("GoghMode").size(20.0).strong().color(sheet.ink));
                     ui.label(
                         RichText::new("the drawing set your agent reads")
                             .size(12.0)
@@ -308,7 +314,9 @@ impl GoghModeApp {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let device_count = self.host.devices().len();
                         let (label, target) = match self.view {
-                            View::Register => (format!("Devices ({device_count})"), View::Devices),
+                            View::Register => {
+                                (format!("Devices ({device_count})"), View::Devices)
+                            }
                             View::Devices => ("Back to register".to_owned(), View::Register),
                         };
                         if ui.button(label).clicked() {
@@ -347,14 +355,11 @@ impl GoghModeApp {
 
         ui.menu_button(
             RichText::new(format!("{dot}  {label}  \u{25be}")).color(tint),
-            |ui| match &self.bridge {
+            |ui| {
+            match &self.bridge {
                 Bridge::Serving(server) => {
                     let url = server.url().to_owned();
-                    ui.label(
-                        RichText::new("Mobile URL")
-                            .size(11.0)
-                            .color(sheet().ink_label),
-                    );
+                    ui.label(RichText::new("Mobile URL").size(11.0).color(sheet().ink_label));
                     ui.monospace(&url);
                     ui.add_space(6.0);
                     if ui.button("Copy mobile URL").clicked() {
@@ -370,8 +375,8 @@ impl GoghModeApp {
                 Bridge::Unavailable(reason) => {
                     ui.label(RichText::new(reason.clone()).color(sheet().stamp));
                 }
-            },
-        );
+            }
+        });
     }
 
     /// Where you go, rather than what you do — there is nothing left to do to a
@@ -397,6 +402,7 @@ impl GoghModeApp {
             });
         });
     }
+
 
     fn draw_devices(&mut self, ui: &mut egui::Ui) {
         let pairing = self.host.pairing_state();
@@ -433,9 +439,7 @@ impl GoghModeApp {
             ui.add(egui::TextEdit::singleline(&mut self.host_name_draft).desired_width(240.0));
             if ui.button("Rename").clicked() {
                 let goghmode_dir = self.goghmode_dir.clone();
-                self.status = match self
-                    .host
-                    .set_display_name(&self.host_name_draft, &goghmode_dir)
+                self.status = match self.host.set_display_name(&self.host_name_draft, &goghmode_dir)
                 {
                     Ok(()) => format!("This host is now called {}", self.host_name_draft),
                     Err(error) => format!("Could not rename this host: {error}"),
@@ -517,9 +521,12 @@ impl GoghModeApp {
                         .strong(),
                 );
                 ui.label(
-                    RichText::new(format!("{} at {}", request.platform, request.peer_address))
-                        .size(12.0)
-                        .color(Color32::from_rgb(150, 162, 178)),
+                    RichText::new(format!(
+                        "{} at {}",
+                        request.platform, request.peer_address
+                    ))
+                    .size(12.0)
+                    .color(Color32::from_rgb(150, 162, 178)),
                 );
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
@@ -654,8 +661,8 @@ impl GoghModeApp {
         let pages = self.pages.clone();
         let pinned = self.pinned_page_id.clone();
         let numbers = sheet_numbers(&pages);
-        let columns =
-            ((ui.available_width() / (THUMBNAIL_WIDTH as f32 + 24.0)).floor() as usize).clamp(1, 6);
+        let columns = ((ui.available_width() / (THUMBNAIL_WIDTH as f32 + 24.0)).floor() as usize)
+            .clamp(1, 6);
         let mut stamping = None;
         let mut sending = None;
 
@@ -750,6 +757,7 @@ impl GoghModeApp {
             .color(Color32::from_rgb(150, 162, 178)),
         );
     }
+
 }
 
 enum SheetAction {
@@ -770,106 +778,88 @@ fn draw_sheet_card(
     let card_width = THUMBNAIL_WIDTH as f32;
     let mut action = SheetAction::None;
 
-    ui.allocate_ui(
-        Vec2::new(card_width, THUMBNAIL_HEIGHT as f32 + 96.0),
-        |ui| {
-            egui::Frame::new()
-                .fill(sheet().paper)
-                .stroke(EguiStroke::new(
-                    1.0,
-                    if issued { sheet().stamp } else { sheet().edge },
-                ))
-                .corner_radius(egui::CornerRadius::same(2))
-                .inner_margin(egui::Margin::same(0))
-                .show(ui, |ui| {
-                    ui.vertical(|ui| {
-                        let image_size = Vec2::new(card_width, THUMBNAIL_HEIGHT as f32);
-                        match thumbnail {
-                            Some(handle) => {
-                                ui.add(egui::Image::new(&handle).fit_to_exact_size(image_size));
-                            }
-                            None => {
-                                ui.allocate_space(image_size);
-                            }
+    ui.allocate_ui(Vec2::new(card_width, THUMBNAIL_HEIGHT as f32 + 96.0), |ui| {
+        egui::Frame::new()
+            .fill(sheet().paper)
+            .stroke(EguiStroke::new(
+                1.0,
+                if issued { sheet().stamp } else { sheet().edge },
+            ))
+            .corner_radius(egui::CornerRadius::same(2))
+            .inner_margin(egui::Margin::same(0))
+            .show(ui, |ui| {
+                ui.vertical(|ui| {
+                    let image_size = Vec2::new(card_width, THUMBNAIL_HEIGHT as f32);
+                    match thumbnail {
+                        Some(handle) => {
+                            ui.add(egui::Image::new(&handle).fit_to_exact_size(image_size));
                         }
+                        None => {
+                            ui.allocate_space(image_size);
+                        }
+                    }
 
-                        // Top rule of the title block.
-                        let (rule, painter) =
-                            ui.allocate_painter(Vec2::new(card_width, 1.0), Sense::hover());
-                        painter.rect_filled(rule.rect, 0.0, sheet().rule);
+                    // Top rule of the title block.
+                    let (rule, painter) =
+                        ui.allocate_painter(Vec2::new(card_width, 1.0), Sense::hover());
+                    painter.rect_filled(rule.rect, 0.0, sheet().rule);
 
-                        ui.add_space(6.0);
-                        ui.horizontal(|ui| {
-                            ui.add_space(10.0);
-                            ui.vertical(|ui| {
-                                ui.label(
-                                    RichText::new("SHEET")
-                                        .size(9.0)
-                                        .strong()
-                                        .color(sheet().ink_label),
-                                );
-                                ui.label(
-                                    RichText::new(format!("{number:02}"))
-                                        .size(12.0)
-                                        .monospace()
-                                        .color(sheet().ink),
-                                );
-                            });
-                            ui.add_space(10.0);
-                            ui.vertical(|ui| {
-                                ui.label(
-                                    RichText::new("NAME")
-                                        .size(9.0)
-                                        .strong()
-                                        .color(sheet().ink_label),
-                                );
-                                ui.label(
-                                    RichText::new(page.title.as_deref().unwrap_or(&page.page_id))
-                                        .size(13.0)
-                                        .strong()
-                                        .color(sheet().ink),
-                                );
-                            });
-                        });
-
-                        ui.add_space(4.0);
-                        ui.horizontal(|ui| {
-                            ui.add_space(10.0);
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(10.0);
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new("SHEET").size(9.0).strong().color(sheet().ink_label));
                             ui.label(
-                                RichText::new(format!(
-                                    "{} · {} strokes",
-                                    relative_time(page.updated_at),
-                                    page.stroke_count
-                                ))
-                                .size(11.0)
-                                .color(sheet().ink_label),
+                                RichText::new(format!("{number:02}"))
+                                    .size(12.0)
+                                    .monospace()
+                                    .color(sheet().ink),
                             );
                         });
-
-                        ui.add_space(6.0);
-                        ui.horizontal(|ui| {
-                            ui.add_space(10.0);
-                            let stamp_label = if issued { "Lift stamp" } else { "Stamp" };
-                            if ui.button(stamp_label).clicked() {
-                                action = SheetAction::Stamp;
-                            }
-                            if ui.button("Send now").clicked() {
-                                action = SheetAction::Send;
-                            }
-                            if issued {
-                                ui.label(
-                                    RichText::new("ISSUED")
-                                        .size(11.0)
-                                        .strong()
-                                        .color(sheet().stamp),
-                                );
-                            }
+                        ui.add_space(10.0);
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new("NAME").size(9.0).strong().color(sheet().ink_label));
+                            ui.label(
+                                RichText::new(page.title.as_deref().unwrap_or(&page.page_id))
+                                    .size(13.0)
+                                    .strong()
+                                    .color(sheet().ink),
+                            );
                         });
-                        ui.add_space(8.0);
                     });
+
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(10.0);
+                        ui.label(
+                            RichText::new(format!(
+                                "{} · {} strokes",
+                                relative_time(page.updated_at),
+                                page.stroke_count
+                            ))
+                            .size(11.0)
+                            .color(sheet().ink_label),
+                        );
+                    });
+
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(10.0);
+                        let stamp_label = if issued { "Lift stamp" } else { "Stamp" };
+                        if ui.button(stamp_label).clicked() {
+                            action = SheetAction::Stamp;
+                        }
+                        if ui.button("Send now").clicked() {
+                            action = SheetAction::Send;
+                        }
+                        if issued {
+                            ui.label(RichText::new("ISSUED").size(11.0).strong().color(sheet().stamp));
+                        }
+                    });
+                    ui.add_space(8.0);
                 });
-        },
-    );
+            });
+    });
 
     action
 }
@@ -983,6 +973,7 @@ fn primary_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
         .stroke(EguiStroke::new(1.0, Color32::from_rgb(241, 205, 111))),
     )
 }
+
 
 /// Enough of the identity to tell two hosts apart on screen without printing a
 /// 32-character string at someone.

@@ -465,13 +465,7 @@ fn ink_key(
         hasher.update(b"no ink");
         return format!("{:x}", hasher.finalize());
     };
-    for value in [
-        window.x,
-        window.y,
-        window.width,
-        window.height,
-        window.scale,
-    ] {
+    for value in [window.x, window.y, window.width, window.height, window.scale] {
         hasher.update(value.to_le_bytes());
     }
 

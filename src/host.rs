@@ -350,10 +350,7 @@ impl SharedHost {
 
         let device_secret = derive_device_secret(&secret, device_id);
         let now = unix_millis();
-        state
-            .registry
-            .devices
-            .retain(|device| device.device_id != device_id);
+        state.registry.devices.retain(|device| device.device_id != device_id);
         state.registry.devices.push(Device {
             device_id: device_id.to_owned(),
             device_name,
@@ -576,10 +573,7 @@ mod tests {
 
     #[test]
     fn mdns_name_keeps_local_when_present() {
-        assert_eq!(
-            normalise_mdns_name("Studio.local").as_deref(),
-            Some("Studio.local")
-        );
+        assert_eq!(normalise_mdns_name("Studio.local").as_deref(), Some("Studio.local"));
     }
 
     #[test]

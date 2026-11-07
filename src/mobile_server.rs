@@ -805,14 +805,8 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, &'static str
     let mut lines = header_text.lines();
     let request_line = lines.next().ok_or("empty request")?;
     let mut request_parts = request_line.split_whitespace();
-    let method = request_parts
-        .next()
-        .ok_or("malformed request line")?
-        .to_owned();
-    let raw_path = request_parts
-        .next()
-        .ok_or("malformed request line")?
-        .to_owned();
+    let method = request_parts.next().ok_or("malformed request line")?.to_owned();
+    let raw_path = request_parts.next().ok_or("malformed request line")?.to_owned();
     let headers: Vec<(String, String)> = lines
         .filter_map(|line| line.split_once(':'))
         .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_owned()))
@@ -960,9 +954,9 @@ pub(crate) fn validate_snapshot(snapshot: &DrawingSnapshot) -> Result<(), String
         // to a path, so a traversal attempt never reaches the filesystem.
         Some(page) if !page_id_is_safe(&page.id) => {
             return Err(format!(
-            "page id {:?} is not usable as a folder name (letters, digits, - and _ only, up to 64)",
-            page.id
-        ))
+                "page id {:?} is not usable as a folder name (letters, digits, - and _ only, up to 64)",
+                page.id
+            ))
         }
         // Version 2 is the version that promises a page; without one the write
         // would silently land in the legacy page instead.
@@ -1297,9 +1291,7 @@ mod tests {
         ));
         // Some other server on the port, and a GoghMode too old to have the
         // route. Both are "not ours", which is the answer that matters.
-        assert!(!is_goghmode_hello(
-            "HTTP/1.1 200 OK\n\n<html>Grafana</html>"
-        ));
+        assert!(!is_goghmode_hello("HTTP/1.1 200 OK\n\n<html>Grafana</html>"));
         assert!(!is_goghmode_hello("HTTP/1.1 404 Not Found\n\nNot Found"));
         assert!(!is_goghmode_hello(""));
     }
