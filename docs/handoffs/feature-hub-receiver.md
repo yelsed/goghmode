@@ -4,7 +4,7 @@
 sketch hub (phase 7, `docs/phases/phase-7-sketch-hub-receiver.md`). Based on
 `feature/narrated-sheets` (PR #14), because narrated sheets travel through the hub from day one.
 
-**State:** built. `src/hub_receiver.rs` applies inbox items through the host's own functions and
+**State:** built, pull request #15 to `feature/narrated-sheets` open for review; `goghmode-receive.service` runs on paperclip. `src/hub_receiver.rs` applies inbox items through the host's own functions and
 fetches and confirms over `curl`; `goghmode receive` and the service files in `contrib/receiver/`
 are in. 179 tests pass.
 
