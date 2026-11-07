@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sketch hub receiver</title>
+<style>
+  :root {
+    --canvas: #f6f4ef;
+    --raised: #ffffff;
+    --text: #1d1c1a;
+    --text-secondary: #5f5b54;
+    --line: #e2ded5;
+    --accent: #b8432f;
+    --accent-soft: #f4e1dc;
+    --done: #2f7a4f;
+    --done-soft: #dcefe3;
+    --waiting: #8a6d1d;
+    --waiting-soft: #f5ecd2;
+    --radius: 12px;
+    --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --canvas: #161513;
+      --raised: #201f1c;
+      --text: #ece9e2;
+      --text-secondary: #a8a398;
+      --line: #34322d;
+      --accent: #e0745f;
+      --accent-soft: #3a231d;
+      --done: #6cc391;
+      --done-soft: #1d3326;
+      --waiting: #d9b65a;
+      --waiting-soft: #352c14;
+    }
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    background: var(--canvas);
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: 16px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  main {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 28px 16px 64px;
+  }
+
+  header p {
+    color: var(--text-secondary);
+    margin: 4px 0 0;
+  }
+
+  .eyebrow {
+    color: var(--accent);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  h1 {
+    font-size: 30px;
+    line-height: 1.2;
+    margin: 6px 0 0;
+  }
+
+  h2 {
+    font-size: 20px;
+    margin: 40px 0 12px;
+  }
+
+  h3 {
+    font-size: 16px;
+    margin: 0 0 6px;
+  }
+
+  code {
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+    background: var(--accent-soft);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+
+  .card {
+    background: var(--raised);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 16px;
+  }
+
+  .card + .card {
+    margin-top: 12px;
+  }
+
+  .card p {
+    margin: 0;
+    color: var(--text-secondary);
+  }
+
+  .flow {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: stretch;
+  }
+
+  .flow-step {
+    background: var(--raised);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+  }
+
+  .flow-step.current {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+
+  .flow-step strong {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 8px;
+    margin-bottom: 4px;
+  }
+
+  .flow-step strong .status {
+    margin-left: 0;
+  }
+
+  .flow-step > span {
+    display: block;
+    color: var(--text-secondary);
+    font-size: 14px;
+  }
+
+  .flow-arrow {
+    color: var(--text-secondary);
+    text-align: center;
+    font-size: 14px;
+  }
+
+  .machines {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .machines .card + .card {
+    margin-top: 0;
+  }
+
+  @media (min-width: 640px) {
+    .flow {
+      flex-direction: row;
+      align-items: stretch;
+    }
+
+    .flow-arrow {
+      align-self: center;
+      max-width: 90px;
+    }
+
+    .flow-step {
+      flex: 1;
+    }
+
+    .machines {
+      grid-template-columns: repeat(3, 1fr);
+    }
+  }
+
+  .status {
+    display: inline-block;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 2px 10px;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
+
+  .status.done {
+    background: var(--done-soft);
+    color: var(--done);
+  }
+
+  .status.next {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+
+  .status.later {
+    background: var(--waiting-soft);
+    color: var(--waiting);
+  }
+
+  ol.tasks {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    counter-reset: task;
+  }
+
+  ol.tasks > li {
+    counter-increment: task;
+    background: var(--raised);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 16px 16px 16px 56px;
+    position: relative;
+  }
+
+  ol.tasks > li + li {
+    margin-top: 12px;
+  }
+
+  ol.tasks > li::before {
+    content: counter(task);
+    position: absolute;
+    left: 16px;
+    top: 14px;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 700;
+    display: grid;
+    place-items: center;
+  }
+
+  ol.tasks p {
+    margin: 0 0 8px;
+    color: var(--text-secondary);
+  }
+
+  ul.tests {
+    margin: 0;
+    padding-left: 18px;
+    font-size: 14px;
+  }
+
+  ul.tests li + li {
+    margin-top: 4px;
+  }
+
+  ul.checklist {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+
+  ul.checklist li {
+    padding: 10px 0 10px 30px;
+    border-bottom: 1px solid var(--line);
+    position: relative;
+  }
+
+  ul.checklist li:last-child {
+    border-bottom: 0;
+  }
+
+  ul.checklist li::before {
+    content: "";
+    position: absolute;
+    left: 2px;
+    top: 13px;
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--line);
+    border-radius: 4px;
+  }
+
+  .decision {
+    border-left: 4px solid var(--accent);
+  }
+
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 20px;
+    color: var(--text-secondary);
+    font-size: 14px;
+    margin-top: 14px;
+  }
+
+  footer {
+    margin-top: 48px;
+    color: var(--text-secondary);
+    font-size: 14px;
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">GoghMode · phase 7 · plan 2 of 3</div>
+    <h1>The sketch hub receiver</h1>
+    <p>Every machine fetches the sketches meant for it from the hub on paperclip, and writes them where the skills already look.</p>
+    <div class="meta">
+      <span>Task <code>TASK-1</code></span>
+      <span>Branch <code>feature/hub-receiver</code></span>
+      <span>Pull request to <code>feature/narrated-sheets</code></span>
+      <span>7 November 2026</span>
+    </div>
+  </header>
+
+  <h2>Where this fits</h2>
+  <div class="flow">
+    <div class="flow-step">
+      <strong>iPad <span class="status later">plan 3</span></strong>
+      <span>Ticks machines and sends live while you draw.</span>
+    </div>
+    <div class="flow-arrow">over the tailnet</div>
+    <div class="flow-step">
+      <strong>Sketch hub <span class="status done">built</span></strong>
+      <span>dev-portal on paperclip, port 8441. Queues per machine, never pushes.</span>
+    </div>
+    <div class="flow-arrow">each machine fetches</div>
+    <div class="flow-step current">
+      <strong>goghmode receive <span class="status next">this plan</span></strong>
+      <span>Writes <code>latest.*</code> into <code>~/Pictures/GoghMode/drawings</code>.</span>
+    </div>
+  </div>
+
+  <h2>Where it runs</h2>
+  <div class="machines">
+    <div class="card">
+      <h3>paperclip <span class="status next">this phase</span></h3>
+      <p>Installed and running as <code>goghmode-receive.service</code> once the tests pass.</p>
+    </div>
+    <div class="card">
+      <h3>omarchy <span class="status later">your call</span></h3>
+      <p>Same systemd unit; installed when you say so.</p>
+    </div>
+    <div class="card">
+      <h3>MacBook <span class="status later">your call</span></h3>
+      <p>A launchd agent with the same command.</p>
+    </div>
+  </div>
+
+  <h2>The three tasks</h2>
+  <ol class="tasks">
+    <li>
+      <h3>Apply what the hub queued</h3>
+      <p>Sheets, pins and promotes go through the host's own functions, in the order sent, so a sheet arrives exactly as with direct pairing.</p>
+      <ul class="tests">
+        <li>A sheet is written as <code>latest.*</code>, also into a drawings folder that does not exist yet.</li>
+        <li>A pin in the same fetch as its sheet points <code>latest.*</code> at that page.</li>
+        <li>An invalid sheet or unknown kind is confirmed and logged, so it cannot block the queue.</li>
+        <li>A write failure stops there: nothing from that item on is confirmed, so it comes again in order.</li>
+      </ul>
+    </li>
+    <li>
+      <h3>Fetch and confirm over curl, in a loop</h3>
+      <p>Two requests per round: get the inbox, confirm what was written. The loop never exits.</p>
+      <ul class="tests">
+        <li>What was applied is confirmed with its id and version.</li>
+        <li>A failed fetch confirms nothing and reports the error.</li>
+        <li>A 403 from the hub becomes one log line carrying the hub's own reason.</li>
+      </ul>
+    </li>
+    <li>
+      <h3>The command, the services, the README</h3>
+      <p><code>goghmode receive --hub https://paperclip.procrast.nl:8441</code>, with the interval (5 s) and timeout (20 s) as flags. A systemd unit and a launchd agent ship in <code>contrib/receiver/</code>.</p>
+      <ul class="tests">
+        <li><code>receive</code> without <code>--hub</code> is refused.</li>
+        <li>On paperclip: refused until allowed on the hub page, then a queued sheet lands and the hub reports it delivered.</li>
+      </ul>
+    </li>
+  </ol>
+
+  <h2>Decisions</h2>
+  <div class="card decision">
+    <h3>ADR-0009 · The receiver calls curl for HTTPS</h3>
+    <p>GoghMode keeps TLS and HTTP frameworks out of its binary (ADR-0004). curl is on macOS and every Arch install, and checks the hub's certificate against the system trust store.</p>
+  </div>
+  <div class="card decision">
+    <h3>ADR-0010 · A sheet from the hub is written exactly as a host writes it</h3>
+    <p>One code path for what ends up on disk, whatever route a sheet took. Pins behave as with a paired host. A bad item is confirmed and logged; a write error is retried in order.</p>
+  </div>
+
+  <h2>Done means</h2>
+  <div class="card">
+    <ul class="checklist">
+      <li>Every line of the phase checklist has a passing test.</li>
+      <li><code>cargo fmt --check</code>, <code>cargo clippy --all-targets</code> and <code>cargo test</code> are green.</li>
+      <li>paperclip receives a sheet queued on the hub, and the hub shows it as delivered.</li>
+      <li>The pull request to <code>feature/narrated-sheets</code> is open for your review.</li>
+    </ul>
+  </div>
+
+  <h2>Not in this plan</h2>
+  <div class="card">
+    <p>The iPad sending to the hub (plan 3). Showing a rejected sheet back on the iPad. Installing the receiver on omarchy or the MacBook.</p>
+  </div>
+
+  <footer>
+    Phase doc <code>docs/phases/phase-7-sketch-hub-receiver.md</code> · full plan <code>docs/superpowers/plans/2026-11-07-hub-receiver.md</code> · contract in dev-portal <code>docs/sketch-hub-api.md</code>
+  </footer>
+</main>
+</body>
+</html>
