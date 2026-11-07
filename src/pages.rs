@@ -293,8 +293,8 @@ pub fn load_page(
         anyhow::bail!("Unusable page id");
     }
     let path = page_dir(drawings_dir.as_ref(), page_id).join(format!("{PAGE_STEM}.json"));
-    let stored =
-        read_stored_page(&path).ok_or_else(|| anyhow::anyhow!("Could not read {}", path.display()))?;
+    let stored = read_stored_page(&path)
+        .ok_or_else(|| anyhow::anyhow!("Could not read {}", path.display()))?;
     let updated_at = stored.updated_at;
     Ok((stored.into_snapshot(), updated_at))
 }

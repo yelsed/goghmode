@@ -96,7 +96,10 @@ pub fn upload_mac(
     host_id: &str,
     body_sha256_hex: &str,
 ) -> String {
-    hmac_hex(device_secret, &upload_message(device_id, timestamp_millis, nonce, host_id, body_sha256_hex))
+    hmac_hex(
+        device_secret,
+        &upload_message(device_id, timestamp_millis, nonce, host_id, body_sha256_hex),
+    )
 }
 
 pub fn upload_mac_matches(
@@ -184,7 +187,14 @@ mod tests {
     #[test]
     fn an_upload_signature_does_not_transfer_to_another_host() {
         let secret = derive_device_secret("0123456789abcdef0123456789abcdef", "device-1");
-        let signature = upload_mac(&secret, "device-1", 1_785_000_000_000, "nonce", "host-a", "digest");
+        let signature = upload_mac(
+            &secret,
+            "device-1",
+            1_785_000_000_000,
+            "nonce",
+            "host-a",
+            "digest",
+        );
 
         assert!(upload_mac_matches(
             &secret,
@@ -224,9 +234,15 @@ mod tests {
 
     #[test]
     fn device_names_cannot_carry_control_characters_into_the_approval_sheet() {
-        assert_eq!(sanitise_device_name("iPad\u{0007}\nof Desley"), "iPadof Desley");
+        assert_eq!(
+            sanitise_device_name("iPad\u{0007}\nof Desley"),
+            "iPadof Desley"
+        );
         assert_eq!(sanitise_device_name("   "), "Unnamed device");
-        assert_eq!(sanitise_device_name(&"x".repeat(200)).len(), DEVICE_NAME_MAX_LENGTH);
+        assert_eq!(
+            sanitise_device_name(&"x".repeat(200)).len(),
+            DEVICE_NAME_MAX_LENGTH
+        );
     }
 
     #[test]

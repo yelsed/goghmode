@@ -27,8 +27,8 @@ pub fn signing_string(parts: &[&str]) -> String {
 }
 
 pub fn hmac_hex(key: &str, message: &str) -> String {
-    let mut mac = HmacSha256::new_from_slice(key.as_bytes())
-        .expect("HMAC accepts a key of any length");
+    let mut mac =
+        HmacSha256::new_from_slice(key.as_bytes()).expect("HMAC accepts a key of any length");
     mac.update(message.as_bytes());
     to_hex(&mac.finalize().into_bytes())
 }
@@ -39,8 +39,8 @@ pub fn hmac_matches(key: &str, message: &str, candidate_hex: &str) -> bool {
     let Some(candidate) = from_hex(candidate_hex) else {
         return false;
     };
-    let mut mac = HmacSha256::new_from_slice(key.as_bytes())
-        .expect("HMAC accepts a key of any length");
+    let mut mac =
+        HmacSha256::new_from_slice(key.as_bytes()).expect("HMAC accepts a key of any length");
     mac.update(message.as_bytes());
     mac.verify_slice(&candidate).is_ok()
 }
@@ -98,10 +98,7 @@ mod tests {
     fn framing_keeps_two_different_field_lists_apart() {
         // Without length prefixes these collide: "ab" + "c" reads the same as
         // "a" + "bc". A device name is user-supplied, so this is reachable.
-        assert_ne!(
-            signing_string(&["ab", "c"]),
-            signing_string(&["a", "bc"])
-        );
+        assert_ne!(signing_string(&["ab", "c"]), signing_string(&["a", "bc"]));
     }
 
     #[test]

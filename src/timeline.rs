@@ -166,7 +166,9 @@ impl Changes {
         let Some(previous_steps) = self.previous_steps else {
             return "First write of this timeline.".to_owned();
         };
-        let unchanged: Vec<usize> = (0..steps).filter(|index| !self.changed.contains(index)).collect();
+        let unchanged: Vec<usize> = (0..steps)
+            .filter(|index| !self.changed.contains(index))
+            .collect();
         let mut text = if self.changed.is_empty() {
             if previous_steps == steps {
                 return "Nothing changed since the previous write of this file.".to_owned();

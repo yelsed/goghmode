@@ -5,6 +5,7 @@ mod crypto;
 mod drawing;
 mod export;
 mod host;
+mod hub_receiver;
 mod mobile_server;
 mod pages;
 mod prompt;
