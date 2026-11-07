@@ -1,7 +1,5 @@
 [Unit]
 Description=GoghMode sketch hub receiver
-After=network-online.target
-Wants=network-online.target
 
 [Service]
 ExecStart=%h/.cargo/bin/goghmode receive --hub https://paperclip.procrast.nl:8441

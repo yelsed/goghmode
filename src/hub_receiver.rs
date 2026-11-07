@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::drawing::DrawingSnapshot;
 use crate::mobile_server::validate_snapshot;
-use crate::pages::{promote_page, set_pin, write_page};
+use crate::pages::{load_page, page_id_is_safe, promote_page, set_pin, write_page};
 
 /// One queued delivery as the hub hands it out, in send order.
 #[derive(Debug, Deserialize)]
@@ -45,13 +45,13 @@ pub fn apply_item(item: &InboxItem, drawings_dir: &Path) -> anyhow::Result<ItemO
     std::fs::create_dir_all(drawings_dir)?;
     match item.kind.as_str() {
         "sheet" => {
-            let Some(raw) = item.snapshot.clone() else {
+            let Some(raw) = &item.snapshot else {
                 return Ok(ItemOutcome::Rejected(format!(
                     "{} carries no snapshot",
                     item.id
                 )));
             };
-            let snapshot: DrawingSnapshot = match serde_json::from_value(raw) {
+            let snapshot = match DrawingSnapshot::deserialize(raw) {
                 Ok(snapshot) => snapshot,
                 Err(error) => {
                     return Ok(ItemOutcome::Rejected(format!(
@@ -70,6 +70,12 @@ pub fn apply_item(item: &InboxItem, drawings_dir: &Path) -> anyhow::Result<ItemO
             Ok(ItemOutcome::Applied(format!("wrote {}", item.id)))
         }
         "pin" => {
+            if let Some(page_id) = item.page_id.as_deref().filter(|id| !page_id_is_safe(id)) {
+                return Ok(ItemOutcome::Rejected(format!(
+                    "{} pins {page_id:?}, which is not a usable page id",
+                    item.id
+                )));
+            }
             set_pin(drawings_dir, item.page_id.as_deref())?;
             Ok(ItemOutcome::Applied(match &item.page_id {
                 Some(page_id) => format!("pinned {page_id}"),
@@ -83,9 +89,9 @@ pub fn apply_item(item: &InboxItem, drawings_dir: &Path) -> anyhow::Result<ItemO
                     item.id
                 )));
             };
-            if !crate::pages::page_dir(drawings_dir, page_id).exists() {
+            if let Err(error) = load_page(drawings_dir, page_id) {
                 return Ok(ItemOutcome::Rejected(format!(
-                    "{} promotes {page_id}, which this machine does not have",
+                    "{} promotes {page_id:?}, which this machine cannot read: {error:#}",
                     item.id
                 )));
             }
@@ -130,12 +136,25 @@ pub fn apply_inbox(items: &[InboxItem], drawings_dir: &Path) -> (Vec<Confirmatio
 pub fn fetch_inbox(hub_url: &str, timeout: Duration) -> anyhow::Result<Vec<InboxItem>> {
     #[derive(Deserialize)]
     struct Inbox {
-        items: Vec<InboxItem>,
+        items: Vec<serde_json::Value>,
     }
     let body = run_curl(&format!("{hub_url}/hub/inbox"), timeout, None)?;
     let inbox: Inbox = serde_json::from_slice(&body)
         .map_err(|error| anyhow::anyhow!("the hub's inbox is not the expected JSON: {error}"))?;
-    Ok(inbox.items)
+    Ok(inbox.items.into_iter().map(read_inbox_item).collect())
+}
+
+/// One item that does not parse must not stop the queue (ADR-0010): it becomes
+/// an item of an unknown kind, which is logged and confirmed with whatever id and
+/// version it carries.
+fn read_inbox_item(value: serde_json::Value) -> InboxItem {
+    InboxItem::deserialize(&value).unwrap_or_else(|error| InboxItem {
+        id: value["id"].as_str().unwrap_or_default().to_owned(),
+        version: value["version"].as_u64().unwrap_or_default(),
+        kind: format!("unreadable ({error})"),
+        page_id: None,
+        snapshot: None,
+    })
 }
 
 /// Tells the hub what was written; skipped when there is nothing to confirm.
@@ -161,7 +180,14 @@ pub fn confirm(
 fn run_curl(url: &str, timeout: Duration, post_body: Option<&[u8]>) -> anyhow::Result<Vec<u8>> {
     let mut command = Command::new("curl");
     command
-        .args(["--silent", "--show-error", "--fail-with-body", "--max-time"])
+        // --fail-with-body needs curl 7.76; the status line works on every curl.
+        .args([
+            "--silent",
+            "--show-error",
+            "--write-out",
+            "\n%{http_code}",
+            "--max-time",
+        ])
         .arg(timeout.as_secs().max(1).to_string())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -180,37 +206,45 @@ fn run_curl(url: &str, timeout: Duration, post_body: Option<&[u8]>) -> anyhow::R
     let mut child = command.spawn().map_err(|error| {
         anyhow::anyhow!("could not run curl, which the receiver needs: {error}")
     })?;
-    if let Some(body) = post_body {
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(body)?;
-        }
-    } else {
-        drop(child.stdin.take());
+    if let (Some(body), Some(mut stdin)) = (post_body, child.stdin.take()) {
+        // A curl that exits early closes the pipe; its exit status says why.
+        let _ = stdin.write_all(body);
     }
     let output = child.wait_with_output()?;
-    if output.status.success() {
-        return Ok(output.stdout);
+    let curl_reason = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    if !output.status.success() {
+        anyhow::bail!("could not reach the hub at {url}: {curl_reason}");
     }
-    let hub_reason = serde_json::from_slice::<serde_json::Value>(&output.stdout)
+    let mut body = output.stdout;
+    let status_start = body.iter().rposition(|byte| *byte == b'\n').unwrap_or(0);
+    let status = String::from_utf8_lossy(&body[status_start..])
+        .trim()
+        .to_owned();
+    body.truncate(status_start);
+    if status.starts_with('2') {
+        return Ok(body);
+    }
+    let hub_reason = serde_json::from_slice::<serde_json::Value>(&body)
         .ok()
         .and_then(|answer| answer["error"].as_str().map(str::to_owned));
-    let curl_reason = String::from_utf8_lossy(&output.stderr).trim().to_owned();
     Err(match hub_reason {
         Some(reason) => anyhow::anyhow!("the hub refused: {reason}"),
-        None => anyhow::anyhow!("could not reach the hub at {url}: {curl_reason}"),
+        None => anyhow::anyhow!("the hub at {url} answered HTTP {status}"),
     })
 }
 
-/// One round: fetch, apply in order, confirm what was handled.
+/// One round: fetch, apply in order, confirm what was handled. What was
+/// written is reported before confirming, so a failed confirm cannot hide it.
 pub fn receive_once(
     fetch: impl Fn() -> anyhow::Result<Vec<InboxItem>>,
     confirm: impl Fn(&[Confirmation]) -> anyhow::Result<()>,
     drawings_dir: &Path,
-) -> anyhow::Result<Vec<String>> {
+    report: &mut impl FnMut(String),
+) -> anyhow::Result<()> {
     let items = fetch()?;
     let (confirmations, log) = apply_inbox(&items, drawings_dir);
-    confirm(&confirmations)?;
-    Ok(log)
+    log.into_iter().for_each(&mut *report);
+    confirm(&confirmations)
 }
 
 /// Runs until the process is stopped. Every problem is logged and retried
@@ -233,13 +267,9 @@ pub fn run_receiver(
             || fetch_inbox(hub_url, timeout),
             |confirmations| confirm(hub_url, timeout, confirmations),
             drawings_dir,
+            &mut |line| println!("{line}"),
         ) {
-            Ok(log) => {
-                last_error.clear();
-                for line in log {
-                    println!("{line}");
-                }
-            }
+            Ok(()) => last_error.clear(),
             Err(error) => {
                 // A hub that keeps refusing would fill the journal once per interval.
                 let message = format!("{error:#}");
@@ -398,7 +428,8 @@ mod tests {
     fn receive_once_confirms_what_it_applied() {
         let (_root, drawings_dir) = fresh_drawings_dir();
         let confirmed = std::cell::RefCell::new(Vec::new());
-        let log = receive_once(
+        let mut log = Vec::new();
+        receive_once(
             || Ok(vec![sheet_item("page-a", 4)]),
             |confirmations: &[Confirmation]| {
                 confirmed.borrow_mut().extend(
@@ -409,6 +440,7 @@ mod tests {
                 Ok(())
             },
             &drawings_dir,
+            &mut |line| log.push(line),
         )
         .unwrap();
         assert_eq!(*confirmed.borrow(), vec![("sheet-page-a".to_owned(), 4)]);
@@ -430,10 +462,71 @@ mod tests {
                 Ok(())
             },
             &drawings_dir,
+            &mut |_| {},
         );
-        let error = result.err().expect("a fetch error is reported").to_string();
+        let error = result.expect_err("a fetch error is reported").to_string();
         assert!(error.contains("not allowed"), "{error}");
         assert!(!confirm_called.get());
+    }
+
+    #[test]
+    fn receive_once_reports_what_it_wrote_even_when_confirm_fails() {
+        let (_root, drawings_dir) = fresh_drawings_dir();
+        let mut log = Vec::new();
+        let result = receive_once(
+            || Ok(vec![sheet_item("page-a", 4)]),
+            |_: &[Confirmation]| Err(anyhow::anyhow!("the confirm timed out")),
+            &drawings_dir,
+            &mut |line| log.push(line),
+        );
+        assert!(result.is_err());
+        assert_eq!(log, vec!["wrote sheet-page-a".to_owned()]);
+    }
+
+    #[test]
+    fn a_pin_with_an_unusable_page_id_is_confirmed_and_logged() {
+        let (_root, drawings_dir) = fresh_drawings_dir();
+        let (confirmations, log) = apply_inbox(
+            &[stamp_item("pin", Some("../x"), 1), sheet_item("page-b", 2)],
+            &drawings_dir,
+        );
+        assert_eq!(confirmations.len(), 2, "{log:?}");
+        assert!(drawings_dir.join("latest.json").exists());
+    }
+
+    #[test]
+    fn a_promote_of_a_page_folder_without_its_page_file_is_confirmed_and_logged() {
+        let (_root, drawings_dir) = fresh_drawings_dir();
+        std::fs::create_dir_all(crate::pages::page_dir(&drawings_dir, "half-written")).unwrap();
+        let (confirmations, log) = apply_inbox(
+            &[stamp_item("promote", Some("half-written"), 1)],
+            &drawings_dir,
+        );
+        assert_eq!(confirmations.len(), 1, "{log:?}");
+    }
+
+    #[test]
+    fn fetch_inbox_sets_a_malformed_item_aside_and_keeps_the_rest() {
+        if !curl_is_installed() {
+            eprintln!("skipped: curl is not installed");
+            return;
+        }
+        let (url, hub) = one_shot_hub(
+            "200 OK",
+            r#"{"items":[{"id":"stamp-1","sequence":1,"version":null,"kind":"pin"},{"id":"stamp-2","sequence":2,"version":2,"kind":"pin","pageId":null}]}"#,
+        );
+        let items = fetch_inbox(&url, std::time::Duration::from_secs(5)).unwrap();
+        hub.join().unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].id, "stamp-1");
+        assert_eq!(items[1].kind, "pin");
+        let (_root, drawings_dir) = fresh_drawings_dir();
+        let (confirmations, log) = apply_inbox(&items[..1], &drawings_dir);
+        assert_eq!(
+            confirmations.len(),
+            1,
+            "a malformed item is confirmed: {log:?}"
+        );
     }
 
     /// Answers one HTTP request with the given status and body, and hands back
@@ -517,8 +610,7 @@ mod tests {
             r#"{"error":"paperclip is not allowed on the sketch hub; allow it on the dev-portal page"}"#,
         );
         let error = fetch_inbox(&url, std::time::Duration::from_secs(5))
-            .err()
-            .expect("a 403 is an error")
+            .expect_err("a 403 is an error")
             .to_string();
         hub.join().unwrap();
         assert!(
