@@ -187,6 +187,15 @@ struct CanvasView: View {
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
+                if destination.host.isSketchHub {
+                    MachineControl(
+                        uploader: uploader,
+                        selection: uploader.machineSelection,
+                        destination: destination,
+                        pageID: pageID
+                    )
+                }
+
                 StatusBadge(status: uploader.status, canRetry: uploader.canRetry) {
                     uploader.retry()
                 } onRePair: {
@@ -629,7 +638,7 @@ struct StatusBadge: View {
         switch status {
         case .idle, .saved: Sheet.review
         case .waiting, .saving: Sheet.inkLabel
-        case .failed, .wrongHost, .needsRepair: Sheet.stamp
+        case .failed, .wrongHost, .needsRepair, .refused: Sheet.stamp
         }
     }
 }

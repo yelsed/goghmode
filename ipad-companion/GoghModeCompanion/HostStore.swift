@@ -13,6 +13,9 @@ import Foundation
 enum HostCredential: Codable, Equatable {
     case paired
     case legacyURL(String)
+    /// The sketch hub on paperclip: no credential of its own, because the hub
+    /// knows this iPad from the tailnet (ADR-0011).
+    case sketchHub
 }
 
 struct SavedHost: Codable, Equatable, Identifiable {
@@ -36,6 +39,24 @@ struct SavedHost: Codable, Equatable, Identifiable {
 
     var isPaired: Bool {
         credential == .paired
+    }
+
+    var isSketchHub: Bool {
+        credential == .sketchHub
+    }
+
+    static let sketchHubID = "sketch-hub"
+    static let sketchHubAddress = "https://paperclip.procrast.nl:8441"
+
+    static func sketchHub(address: String) -> SavedHost {
+        SavedHost(
+            id: sketchHubID,
+            name: "Sketch hub",
+            platform: "hub",
+            address: address,
+            addresses: [address],
+            credential: .sketchHub
+        )
     }
 
     /// The address the companion tries first, then the rest, deduped. That is
@@ -116,6 +137,11 @@ final class HostStore: ObservableObject {
         hosts.append(host)
         selectedHostID = host.id
         save()
+    }
+
+    /// Saved and chosen like a host; adding it again replaces the address.
+    func addSketchHub(address: String) {
+        add(SavedHost.sketchHub(address: address), secret: nil)
     }
 
     func remove(_ hostID: String) {
