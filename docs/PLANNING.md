@@ -181,6 +181,6 @@ The hub becomes a destination in the iPad companion, with machines ticked as a s
 selection and the state shown per machine. Checklist:
 [phase-8-sketch-hub-sender](phases/phase-8-sketch-hub-sender.md).
 
-- [ ] The hub as a destination, trusted through the tailnet (ADR-0011).
-- [ ] Ticked machines, remembered, sent live; pin and promote through the hub.
-- [ ] Queued, refused or delivered per machine.
+- [x] The hub as a destination, trusted through the tailnet (ADR-0011).
+- [x] Ticked machines, remembered, sent live; pin and promote through the hub.
+- [x] Queued, refused or delivered per machine.

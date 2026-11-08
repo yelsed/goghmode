@@ -37,19 +37,19 @@ so the pull request goes to `feature/hub-receiver` and moves down with it.
 
 ## Checklist (each line is proven by a test)
 
-- [ ] The hub can be added as a destination with its address; it is saved, listed with the paired
+- [x] The hub can be added as a destination with its address; it is saved, listed with the paired
       hosts and can be chosen like one.
-- [ ] With the hub chosen, the machines come from `GET /hub/machines`; the ticked set is remembered
+- [x] With the hub chosen, the machines come from `GET /hub/machines`; the ticked set is remembered
       across launches, and a ticked machine the hub no longer lists stays visible as unavailable.
-- [ ] A sheet goes to `POST /hub/sheets` once, with the ticked machines as `targets` and the same
+- [x] A sheet goes to `POST /hub/sheets` once, with the ticked machines as `targets` and the same
       snapshot a host gets, about 600 ms after a change, as uploads to a host do.
-- [ ] With nothing ticked nothing is sent, and the app says to tick a machine.
-- [ ] Pin and promote go to `POST /hub/stamps` for the ticked machines.
-- [ ] The state per machine shows queued, refused with the hub's reason, or delivered, from the
+- [x] With nothing ticked nothing is sent, and the app says to tick a machine.
+- [x] Pin and promote go to `POST /hub/stamps` for the ticked machines.
+- [x] The state per machine shows queued, refused with the hub's reason, or delivered, from the
       send answer and `GET /hub/deliveries`; never one combined "sent".
-- [ ] A 403 shows the hub's own sentence (allow the iPad on the dev-portal page); no connection
+- [x] A 403 shows the hub's own sentence (allow the iPad on the dev-portal page); no connection
       shows as offline and retries, as with a host.
-- [ ] Direct pairing with a host works exactly as before.
+- [x] Direct pairing with a host works exactly as before.
 
 ## Not in this phase
 
