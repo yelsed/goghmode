@@ -397,6 +397,42 @@ mod tests {
     }
 
     #[test]
+    fn a_narrated_sheet_writes_the_timeline_the_narrated_skill_reads() {
+        let (_root, drawings_dir) = fresh_drawings_dir();
+        let mut item = sheet_item("talk", 1);
+        item.snapshot = Some(serde_json::json!({
+            "schemaVersion": crate::drawing::NARRATED_SCHEMA_VERSION,
+            "page": {"id": "talk", "title": "Talk"},
+            "canvas": {"width": 200, "height": 200, "background": "#ffffff"},
+            "strokes": [{
+                "id": "stroke-1",
+                "color": "#111827",
+                "width": 4,
+                "startedAt": 1500,
+                "points": [
+                    {"x": 20, "y": 20, "pressure": 0.5, "t": 0},
+                    {"x": 60, "y": 60, "pressure": 0.5, "t": 100}
+                ]
+            }],
+            "narration": {
+                "language": "nl",
+                "segments": [{"start": 1000, "end": 3000, "text": "Eerst de database."}]
+            }
+        }));
+
+        let (_, log) = apply_inbox(&[item], &drawings_dir);
+
+        let timeline = std::fs::read_to_string(drawings_dir.join("latest.timeline.md"))
+            .unwrap_or_else(|error| panic!("no timeline ({error}), log: {log:?}"));
+        assert!(timeline.contains("> Eerst de database."));
+        assert!(drawings_dir.join("latest.steps").join("001.png").exists());
+
+        apply_inbox(&[sheet_item("plain", 2)], &drawings_dir);
+        assert!(!drawings_dir.join("latest.timeline.md").exists());
+        assert!(!drawings_dir.join("latest.steps").exists());
+    }
+
+    #[test]
     fn a_pin_after_its_sheet_in_one_fetch_points_latest_at_that_page() {
         let (_root, drawings_dir) = fresh_drawings_dir();
         let items = [sheet_item("page-a", 1)];
