@@ -80,11 +80,12 @@ struct MachineListView: View {
     var body: some View {
         List {
             Section {
-                if let complaint = uploader.machineListComplaint, uploader.offeredMachines == nil {
+                if let complaint = uploader.machineListComplaint {
                     Text(complaint)
                         .font(.footnote)
                         .foregroundStyle(Sheet.inkLabel)
-                } else if rows.isEmpty, uploader.offeredMachines != nil {
+                }
+                if rows.isEmpty, uploader.offeredMachines != nil, uploader.machineListComplaint == nil {
                     Text("No machine fetches from the hub yet. Run goghmode receive on a machine and allow it on dev.procrast.nl.")
                         .font(.footnote)
                         .foregroundStyle(Sheet.inkLabel)
@@ -92,6 +93,7 @@ struct MachineListView: View {
                 ForEach(rows) { row in
                     Button {
                         selection.toggle(row.name)
+                        Task { await uploader.sendWhatWasWaitingForAMachine() }
                     } label: {
                         MachineRowView(row: row, delivery: delivery(for: row.name))
                     }

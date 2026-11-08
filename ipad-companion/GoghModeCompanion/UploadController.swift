@@ -228,6 +228,9 @@ final class UploadController: ObservableObject {
         addressesThatRefusedRuling.removeAll()
         addressesThatRefusedNarration.removeAll()
         hostIsKnown = false
+        offeredMachines = nil
+        machineListComplaint = nil
+        hubDeliveries.removeAll()
         pagesSupported = true
         pinningSupported = true
         rulingSupported = true
@@ -296,6 +299,25 @@ final class UploadController: ObservableObject {
         if let pageID {
             hubDeliveries[pageID] = deliveries
         }
+        try Self.failWhenEveryMachineRefused(deliveries)
+    }
+
+    /// The hub answers 200 even when it queued for nobody. Some machines refusing
+    /// is shown on their lines; all of them refusing means nothing went anywhere.
+    private static func failWhenEveryMachineRefused(_ deliveries: [MachineDelivery]) throws {
+        guard !deliveries.isEmpty, deliveries.allSatisfy({ $0.state == .refused }) else { return }
+        throw SketchHubError.refused(deliveries.first?.reason ?? "every machine refused")
+    }
+
+    /// Ticking a machine after drawing with none ticked sends the sheet that was
+    /// kept back, instead of waiting for the next stroke.
+    func sendWhatWasWaitingForAMachine() async {
+        guard complaint == MachineSelection.nothingTickedMessage,
+              let snapshot = lastSnapshot,
+              let destination = lastDestination,
+              !machineSelection.ticked.isEmpty
+        else { return }
+        await send(snapshot, to: destination)
     }
 
     private func tickedMachines() throws -> [String] {
@@ -309,18 +331,33 @@ final class UploadController: ObservableObject {
     /// Asks the hub which machines it can deliver to.
     func loadOfferedMachines(from destination: Destination) async {
         do {
-            offeredMachines = try await hubClient.machines(at: destination.host.address)
-            machineListComplaint = nil
+            let machines = try await hubClient.machines(at: destination.host.address)
+            if machines != offeredMachines {
+                offeredMachines = machines
+            }
+            if machineListComplaint != nil {
+                machineListComplaint = nil
+            }
         } catch {
+            // Closing the list cancels the request; that is not the hub failing.
+            if error is CancellationError { return }
+            if let urlError = error as? URLError, urlError.code == .cancelled { return }
             machineListComplaint = guidance(for: error, sketchHub: true)
         }
     }
 
     /// Asks the hub what reached each machine for one page.
     func refreshDeliveries(of pageID: String, from destination: Destination) async {
-        guard let deliveries = try? await hubClient.deliveries(of: pageID, at: destination.host.address)
+        guard let fetched = try? await hubClient.deliveries(of: pageID, at: destination.host.address)
         else { return }
-        hubDeliveries[pageID] = deliveries
+        // The route lists only machines the page was queued for, so the refusals
+        // from the send answer are kept beside it.
+        let listed = Set(fetched.map(\.machine))
+        let refusals = (hubDeliveries[pageID] ?? []).filter { $0.state == .refused && !listed.contains($0.machine) }
+        let merged = (fetched + refusals).sorted { $0.machine < $1.machine }
+        if merged != hubDeliveries[pageID] {
+            hubDeliveries[pageID] = merged
+        }
     }
 
     private func stamp(
@@ -342,7 +379,7 @@ final class UploadController: ObservableObject {
             try await perform()
             return true
         } catch {
-            record(error)
+            record(error, sketchHub: destination.host.isSketchHub)
             return false
         }
     }
@@ -352,7 +389,7 @@ final class UploadController: ObservableObject {
         lastDestination = destination
     }
 
-    private func record(_ error: Error) {
+    private func record(_ error: Error, sketchHub: Bool? = nil) {
         // A cancelled upload is the next stroke arriving, not a failure. URLSession
         // reports it as `URLError.cancelled`, whose description is the bare word
         // "cancelled" — which is what every stroke used to put on screen.
@@ -378,7 +415,7 @@ final class UploadController: ObservableObject {
             status = .wrongHost(message)
             return
         }
-        let message = guidance(for: error, sketchHub: lastDestination?.host.isSketchHub ?? false)
+        let message = guidance(for: error, sketchHub: sketchHub ?? lastDestination?.host.isSketchHub ?? false)
         complaint = message
         status = .failed(message)
     }
@@ -526,6 +563,7 @@ final class UploadController: ObservableObject {
                 at: destination.host.address
             )
             hubDeliveries[snapshot.page?.id ?? legacyPageID] = deliveries
+            try Self.failWhenEveryMachineRefused(deliveries)
             return
         }
         if destination.isPaired {

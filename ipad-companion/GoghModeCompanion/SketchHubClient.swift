@@ -206,10 +206,16 @@ struct SketchHubClient {
             let digits = text[text.index(after: dot)..<zoneStart].prefix(3)
             trimmed = String(text[..<dot]) + "." + digits.padding(toLength: 3, withPad: "0", startingAt: 0)
                 + String(text[zoneStart...])
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            return formatter.date(from: trimmed)
+            return fractionalFormatter.date(from: trimmed)
         }
-        return ISO8601DateFormatter().date(from: trimmed)
+        return wholeSecondFormatter.date(from: trimmed)
     }
+
+    private static let fractionalFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static let wholeSecondFormatter = ISO8601DateFormatter()
 }
