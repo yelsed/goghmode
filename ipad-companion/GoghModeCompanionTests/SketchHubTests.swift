@@ -306,4 +306,81 @@ final class SketchHubTests: XCTestCase {
         XCTAssertEqual(RecordingHubProtocol.requests.map { $0.request.url?.path }, ["/hub/stamps"])
         XCTAssertEqual(try requestJSON()["pageId"] as? String, "page-7")
     }
+
+    @MainActor
+    private func controllerTicking(_ machines: [String]) -> UploadController {
+        let selection = MachineSelection(defaults: freshDefaults())
+        machines.forEach(selection.toggle)
+        return UploadController(
+            hubClient: SketchHubClient(session: RecordingHubProtocol.session()),
+            machineSelection: selection
+        )
+    }
+
+    /// The hub answers 200 even when it queued for nobody; that is not a save.
+    @MainActor
+    func testASheetEveryMachineRefusedIsNotReportedAsSaved() async {
+        RecordingHubProtocol.reset(
+            body: #"{"deliveries":[{"machine":"omarchy","state":"refused","reason":"the queue for omarchy is full"}]}"#
+        )
+        let controller = controllerTicking(["omarchy"])
+
+        let sent = await controller.send(sheet("page-7"), to: hubDestination())
+
+        XCTAssertFalse(sent)
+        XCTAssertEqual(controller.status.label, "Refused")
+        XCTAssertEqual(controller.complaint, "The hub refused: the queue for omarchy is full")
+        XCTAssertEqual(controller.hubDeliveries["page-7"]?.first?.state, .refused)
+    }
+
+    @MainActor
+    func testAPinEveryMachineRefusedIsNotAccepted() async {
+        RecordingHubProtocol.reset(
+            body: #"{"deliveries":[{"machine":"omarchy","state":"refused","reason":"omarchy is not an allowed machine"}]}"#
+        )
+        let controller = controllerTicking(["omarchy"])
+
+        let accepted = await controller.pin("page-7", to: hubDestination())
+
+        XCTAssertFalse(accepted)
+    }
+
+    /// The deliveries route lists only machines the page was queued for, so a
+    /// refusal from the send answer has to survive a refresh.
+    @MainActor
+    func testARefreshKeepsTheRefusalsFromTheSendAnswer() async {
+        RecordingHubProtocol.reset(
+            body: #"{"deliveries":[{"machine":"paperclip","state":"queued"},{"machine":"omarchy","state":"refused","reason":"the queue for omarchy is full"}]}"#
+        )
+        let controller = controllerTicking(["omarchy", "paperclip"])
+        _ = await controller.send(sheet("page-7"), to: hubDestination())
+
+        RecordingHubProtocol.reset(
+            body: #"{"deliveries":[{"machine":"paperclip","state":"delivered","confirmedAt":"2026-11-08T10:00:00Z"}]}"#
+        )
+        await controller.refreshDeliveries(of: "page-7", from: hubDestination())
+
+        let deliveries = controller.hubDeliveries["page-7"] ?? []
+        XCTAssertEqual(deliveries.first { $0.machine == "paperclip" }?.state, .delivered)
+        XCTAssertEqual(deliveries.first { $0.machine == "omarchy" }?.reason, "the queue for omarchy is full")
+    }
+
+    /// Drawing with nothing ticked keeps the sheet; ticking a machine sends it.
+    @MainActor
+    func testTickingAMachineSendsTheSheetThatWasWaiting() async throws {
+        let selection = MachineSelection(defaults: freshDefaults())
+        let controller = UploadController(
+            hubClient: SketchHubClient(session: RecordingHubProtocol.session()),
+            machineSelection: selection
+        )
+        _ = await controller.send(sheet("page-7"), to: hubDestination())
+        XCTAssertTrue(RecordingHubProtocol.requests.isEmpty)
+
+        RecordingHubProtocol.reset(body: #"{"deliveries":[{"machine":"paperclip","state":"queued"}]}"#)
+        selection.toggle("paperclip")
+        await controller.sendWhatWasWaitingForAMachine()
+
+        XCTAssertEqual(RecordingHubProtocol.requests.map { $0.request.url?.path }, ["/hub/sheets"])
+        XCTAssertNil(controller.complaint)
+    }
 }
