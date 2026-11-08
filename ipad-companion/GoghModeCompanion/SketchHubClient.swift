@@ -130,6 +130,11 @@ struct SketchHubClient {
         return answer.deliveries.map(\.delivery)
     }
 
+    /// Every refusal from the hub: `{"error": "..."}`.
+    private struct Refusal: Decodable {
+        let error: String
+    }
+
     private struct DeliveriesAnswer: Decodable {
         struct Delivery: Decodable {
             let machine: String
@@ -181,9 +186,6 @@ struct SketchHubClient {
             throw SketchHubError.invalidResponse
         }
         guard (200..<300).contains(httpResponse.statusCode) else {
-            struct Refusal: Decodable {
-                let error: String
-            }
             let reason = (try? JSONDecoder().decode(Refusal.self, from: data))?.error
             throw SketchHubError.refused(reason ?? "status \(httpResponse.statusCode)")
         }
