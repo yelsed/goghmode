@@ -175,3 +175,12 @@ tailnet, and each machine fetches what was meant for it. This phase is the fetch
 - [ ] HTTPS through `curl` (ADR-0009).
 - [ ] Service files for systemd and launchd.
 - [ ] The iPad sends to the hub (plan 3, its own phase).
+
+### Phase 8: the iPad sends through the sketch hub
+The hub becomes a destination in the iPad companion, with machines ticked as a standing
+selection and the state shown per machine. Checklist:
+[phase-8-sketch-hub-sender](phases/phase-8-sketch-hub-sender.md).
+
+- [ ] The hub as a destination, trusted through the tailnet (ADR-0011).
+- [ ] Ticked machines, remembered, sent live; pin and promote through the hub.
+- [ ] Queued, refused or delivered per machine.
