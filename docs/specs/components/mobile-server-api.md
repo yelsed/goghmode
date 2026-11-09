@@ -39,7 +39,7 @@ before matching.
 | GET / HEAD | `{prefix}manifest.webmanifest` | `application/manifest+json` |
 | GET / HEAD | `{prefix}service-worker.js` | `text/javascript` |
 | GET / HEAD | `{prefix}icon.svg` | `image/svg+xml` |
-| GET / HEAD | `{prefix}capabilities` | `{"schemaVersions":[1,2,3],"features":["pages","pin","promote","pairing-v2","ruling"]}`, `application/json` |
+| GET / HEAD | `{prefix}capabilities` | `{"schemaVersions":[1,2,3,4],"features":["pages","pin","promote","pairing-v2","ruling","narration"]}`, `application/json` |
 | GET / HEAD | `/{token}` (no trailing slash) | `308` redirect to `{prefix}` |
 | POST | `{prefix}save` | `200 {"ok":true}` · `400` with a reason · `500` on write failure · **`403` once a device has been paired**, unless the legacy toggle is back on |
 | POST | `{prefix}pin`, `{prefix}promote` | As above, and closed by the same gate. An anonymous `pin` would choose what the agent reads without ever sending a stroke. |
@@ -107,7 +107,7 @@ an iPad.
 | Limit | Value |
 | --- | --- |
 | Body size | 4 MiB, checked on headers and on the declared `Content-Length` |
-| `schemaVersion` | `1`, `2` or `3`. Only a sheet carrying ruling asks for `3`; a plain sheet still sends `2`. |
+| `schemaVersion` | `1`, `2`, `3` or `4`. Only a sheet carrying ruling asks for `3`, only one carrying narration for `4`; a plain sheet still sends `2`. |
 | `canvas.ruling` | Optional. `{"style":"lines\|grid\|dots","spacing":8..=256}`. Rejected with a named reason outside that range. |
 | `page` | required at version 2, absent at version 1 |
 | `page.id` | `[A-Za-z0-9_-]`, 1–64 characters |
@@ -120,6 +120,8 @@ an iPad.
 | `stroke.width` | finite, `0.5 ..= 80.0` |
 | Total points | ≤ 200 000 |
 | Every point | finite, and inside the canvas rectangle |
+| `stroke.startedAt` | optional `u64`, any version |
+| `narration` | Optional. Needs version 4. `language` ≤ 16 chars, `engine` ≤ 128, ≤ 4096 segments, each `start <= end` with `text` ≤ 2000 chars. Rejected with a named reason otherwise. |
 
 Every rejection also logs `goghmode: rejected upload: {reason}` to stderr.
 
@@ -140,7 +142,8 @@ says so in the UI.
 
 On success it calls `crate::pages::write_page` with the drawings directory captured
 at server start — the Mac owning the output directory is what makes that possible.
-See [export-contract](export-contract.md).
+See [export-contract](export-contract.md). A narrated sheet (version 4) also gets
+its timeline and step crops written there; the audio never reaches the server.
 
 ## Design tokens
 Not applicable.
@@ -152,7 +155,7 @@ No HTTP framework, no async runtime, no TLS — the reasoning is in
 
 ## Data
 - **Accepts:** one `DrawingSnapshot` per POST.
-- **Writes:** through `export::write_snapshot` only.
+- **Writes:** through `pages::write_page`, and so `export::write_artifacts`, only.
 - **Reads:** nothing. There is no endpoint that returns a drawing, which is why
   Mac-side page browsing is deferred in [PLANNING.md](../../PLANNING.md).
 

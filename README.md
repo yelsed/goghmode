@@ -47,9 +47,11 @@ This creates:
 
 ```text
 ~/.claude/skills/goghmode/SKILL.md
+~/.claude/skills/goghmode-narrated/SKILL.md
 ```
 
-After that, you can use `/goghmode` in Claude Code.
+After that, you can use `/goghmode` in Claude Code, and `/goghmode-narrated` for a sheet you
+spoke over (see [Narrated sheets](#narrated-sheets)).
 
 ## Copy a sheet to the clipboard
 
@@ -133,6 +135,22 @@ browser companion gets one page per browser.
 
 Pages are kept forever. Nothing deletes them on a timer.
 
+## Narrated sheets
+
+On the iPad, a microphone button on the open sheet records what you say while you draw. The speech
+is turned into text on the iPad itself; the audio stays there. The host then writes, beside the
+usual three files:
+
+```text
+~/Pictures/GoghMode/drawings/latest.timeline.md
+~/Pictures/GoghMode/drawings/latest.steps/001.png, 002.png, ...
+```
+
+The timeline lists each step: what was said, and how many strokes were added where. Each step names
+a small crop of the page showing only the region where ink was added, with that ink on a pale blue
+halo and everything else unchanged. In Claude Code, `/goghmode-narrated` reads the sheet in that
+order. A sheet you did not speak over has none of this, and `/goghmode` reads it exactly as before.
+
 ## The desktop window
 
 The desktop app stopped being a drawing surface. It owns the drawings directory, runs the local
@@ -192,6 +210,41 @@ Mobile buttons:
 - `Export PNG`, `Export SVG`, and `Export JSON` keep files on the phone.
 - `Undo`, `Clear`, and `Brush` work locally in the phone browser.
 
+## Receive through the sketch hub
+
+The sketch hub in dev-portal on paperclip queues sketches per machine. `goghmode receive` runs in the background on each machine, fetches what was queued for it over the tailnet, and writes it into the drawings directory exactly as a paired host does: a sheet becomes `latest.*` and its page files, and a pin or promote behaves as with a paired host. There is no key: the hub knows the machine from its Tailscale name.
+
+1. Install GoghMode on the machine (`cargo install --path .`). The receiver uses the system's `curl`.
+2. Start the receiver once by hand:
+
+   ```bash
+   goghmode receive --hub https://paperclip.procrast.nl:8441
+   ```
+
+   Until the machine is allowed it logs the hub's refusal, which names the machine.
+3. Open `https://dev.procrast.nl/`, find the machine under "Sketch hub" and allow it. From the next fetch on it appears in the list a sender can tick.
+4. Keep it running as a service.
+
+   Linux (systemd user unit):
+
+   ```bash
+   mkdir -p ~/.config/systemd/user
+   cp contrib/receiver/goghmode-receive.service ~/.config/systemd/user/
+   systemctl --user daemon-reload
+   systemctl --user enable --now goghmode-receive.service
+   loginctl enable-linger "$USER"   # keeps it running without a login, on a server
+   journalctl --user -u goghmode-receive.service -f
+   ```
+
+   macOS (launchd agent, log in `/tmp/goghmode-receive.log`):
+
+   ```bash
+   cp contrib/receiver/goghmode-receive.plist ~/Library/LaunchAgents/
+   launchctl load ~/Library/LaunchAgents/goghmode-receive.plist
+   ```
+
+`--interval-seconds` (default 5) sets how often it asks, `--timeout-seconds` (default 20) how long connecting may take and how long a transfer may stall without a byte, and the global `--drawings-dir` where it writes. A sheet the hub sent that is not a valid drawing is logged and confirmed, so it cannot block the queue; a write that fails is retried on the next round, in order.
+
 ## Update after code changes
 
 From this project directory:
@@ -212,7 +265,7 @@ Quit any already-running GoghMode window, then reopen it.
 - **`/goghmode` is unavailable:** run `goghmode install-skill --target claude`, then restart Claude Code.
 - **The phone cannot open the mobile URL:** keep GoghMode open, keep both devices on the same Wi-Fi, and use the exact URL from the connection chip.
 - **The iPad says the desktop is an older version:** run `cargo install --path . --force` and
-  `goghmode install-app`, then reopen the app. Pages, stamping and ruling each need a host new
+  `goghmode install-app`, then reopen the app. Pages, stamping, ruling and narration each need a host new
   enough to understand them, and the iPad says which one is missing.
 - **`Send to desktop` fails:** keep the desktop app open and reload the phone page from the current mobile URL.
 - **Image paste does not work in an AI interface:** use `/goghmode`, or `goghmode copy` to put the

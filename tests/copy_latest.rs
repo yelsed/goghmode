@@ -10,6 +10,8 @@ mod export;
 mod pages;
 #[path = "../src/raycast.rs"]
 mod raycast;
+#[path = "../src/timeline.rs"]
+mod timeline;
 
 use clipboard::{
     describe_age, read_sheet_image, read_updated_at, sheet_image_path, sheet_json_path,

@@ -7,6 +7,7 @@ struct HostListView: View {
     @ObservedObject var hostStore: HostStore
     @Environment(\.dismiss) private var dismiss
     @State private var showingPairing = false
+    @State private var showingAddHub = false
     @AppStorage(goghModeKeepAwakeKey) private var keepAwake = true
 
     var body: some View {
@@ -23,8 +24,8 @@ struct HostListView: View {
                         dismiss()
                     } label: {
                         HStack(spacing: 12) {
-                            Image(systemName: host.isPaired ? "lock.fill" : "link")
-                                .foregroundStyle(host.isPaired ? Color.accentColor : .secondary)
+                            Image(systemName: symbol(for: host))
+                                .foregroundStyle(host.isPaired || host.isSketchHub ? Color.accentColor : .secondary)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(host.name).font(.body.weight(.medium))
                                 Text(subtitle(for: host))
@@ -56,7 +57,18 @@ struct HostListView: View {
             .navigationTitle("Hosts")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    Button("Pair") { showingPairing = true }
+                    Menu("Add") {
+                        Button {
+                            showingPairing = true
+                        } label: {
+                            Label("Pair a host", systemImage: "qrcode.viewfinder")
+                        }
+                        Button {
+                            showingAddHub = true
+                        } label: {
+                            Label("Add the sketch hub", systemImage: "point.3.connected.trianglepath.dotted")
+                        }
+                    }
                 }
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
@@ -65,11 +77,25 @@ struct HostListView: View {
             .sheet(isPresented: $showingPairing) {
                 PairingView(hostStore: hostStore)
             }
+            .sheet(isPresented: $showingAddHub) {
+                AddSketchHubView(hostStore: hostStore)
+            }
         }
     }
 
+    private func symbol(for host: SavedHost) -> String {
+        if host.isSketchHub {
+            return "point.3.connected.trianglepath.dotted"
+        }
+        return host.isPaired ? "lock.fill" : "link"
+    }
+
     private func subtitle(for host: SavedHost) -> String {
-        host.isPaired
+        if host.isSketchHub {
+            let name = URLComponents(string: host.address)?.host ?? host.address
+            return "\(name) · through the tailnet"
+        }
+        return host.isPaired
             ? "\(host.platform) · paired"
             // Named plainly rather than dressed up: this one is only as private
             // as the URL it was set up with.
@@ -154,6 +180,73 @@ struct PairingView: View {
                     ?? error.localizedDescription
                 isPairing = false
             }
+        }
+    }
+}
+
+/// Adds the sketch hub. Nothing to scan: the hub knows this iPad from the
+/// tailnet, so the address is all it takes. The hub is asked once before it is
+/// saved, so a refusal is read here, where allowing the iPad is explained.
+struct AddSketchHubView: View {
+    @ObservedObject var hostStore: HostStore
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var address = SavedHost.sketchHubAddress
+    @State private var isChecking = false
+    @State private var failure: String?
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Address")
+                    .font(.headline)
+                HStack {
+                    TextField(SavedHost.sketchHubAddress, text: $address)
+                        .textFieldStyle(.roundedBorder)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                    Button("Add", action: add)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(address.isEmpty || isChecking)
+                }
+                Text("The hub knows this iPad through the tailnet. Allow it once on dev.procrast.nl, under Sketch hub.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                if isChecking {
+                    ProgressView("Asking the hub…")
+                }
+                if let failure {
+                    Text(failure)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
+                Spacer()
+            }
+            .padding(20)
+            .navigationTitle("Add the sketch hub")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func add() {
+        isChecking = true
+        failure = nil
+        Task {
+            do {
+                _ = try await SketchHubClient().machines(at: address)
+                hostStore.addSketchHub(address: address.trimmingCharacters(in: .whitespacesAndNewlines))
+                dismiss()
+            } catch {
+                failure = (error as? SketchHubError)?.errorDescription
+                    ?? "The sketch hub is not answering. Check that this iPad is on the tailnet."
+            }
+            isChecking = false
         }
     }
 }

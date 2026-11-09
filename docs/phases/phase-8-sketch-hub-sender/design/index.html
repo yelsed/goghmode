@@ -1,0 +1,593 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sketch hub sender design</title>
+<style>
+  :root {
+    --sheet: #ffffff;
+    --sheet-edge: #d8d4cc;
+    --ground: #edeae4;
+    --rule-hair: #c9c4bb;
+    --ink: #1a1917;
+    --ink-secondary: #4a4640;
+    --ink-label: #6b665e;
+    --stamp: #b4331f;
+    --review: #2b5c8a;
+    --system-blue: #0a84ff;
+    --list-ground: #f2f2f7;
+    --list-row: #ffffff;
+    --list-line: #e3e3e8;
+    --font: -apple-system, "SF Pro Text", system-ui, sans-serif;
+    --mono: "SF Mono", ui-monospace, Menlo, monospace;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    background: #d9d6d0;
+    color: var(--ink);
+    font-family: var(--font);
+    font-size: 15px;
+    line-height: 1.4;
+  }
+
+  main {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 24px 16px 64px;
+  }
+
+  h1 {
+    font-size: 24px;
+    margin: 0 0 4px;
+  }
+
+  .intro {
+    color: var(--ink-secondary);
+    margin: 0 0 24px;
+  }
+
+  .state {
+    margin: 0 0 40px;
+  }
+
+  .state h2 {
+    font-size: 17px;
+    margin: 0 0 4px;
+  }
+
+  .state > p {
+    color: var(--ink-secondary);
+    margin: 0 0 10px;
+  }
+
+  .ipad {
+    position: relative;
+    background: var(--ground);
+    border: 10px solid #1d1d1f;
+    border-radius: 22px;
+    overflow: hidden;
+    min-height: 420px;
+  }
+
+  .nav {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 52px;
+    padding: 0 14px;
+    background: var(--ground);
+  }
+
+  .nav .title {
+    flex: 1;
+    font-weight: 600;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .nav .back,
+  .nav .action {
+    color: var(--system-blue);
+    font-size: 15px;
+    white-space: nowrap;
+  }
+
+  .nav .icon {
+    width: 32px;
+    height: 32px;
+    display: grid;
+    place-items: center;
+    color: var(--system-blue);
+    font-size: 17px;
+  }
+
+  .nav .icon.off {
+    color: #b8b8bd;
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 44px;
+    padding: 0 8px;
+    white-space: nowrap;
+  }
+
+  .chip .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--review);
+  }
+
+  .chip .dot.waiting {
+    background: var(--ink-label);
+  }
+
+  .chip .dot.failed {
+    background: var(--stamp);
+  }
+
+  .chip .label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+  }
+
+  .chip .time {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--ink-label);
+  }
+
+  .chip.pressed {
+    background: rgba(0, 0, 0, 0.06);
+    border-radius: 8px;
+  }
+
+  .chip .chevron {
+    color: var(--ink-label);
+    font-size: 11px;
+  }
+
+  .notice {
+    padding: 8px 16px;
+    font-size: 13px;
+    background: var(--ground);
+    color: var(--ink);
+  }
+
+  .canvas {
+    background: var(--sheet);
+    min-height: 360px;
+    position: relative;
+  }
+
+  .canvas svg {
+    display: block;
+    width: 100%;
+    height: 360px;
+  }
+
+  .popover {
+    position: absolute;
+    top: 50px;
+    right: 120px;
+    width: min(360px, calc(100% - 24px));
+    background: var(--list-row);
+    border-radius: 13px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.22);
+    overflow: hidden;
+    z-index: 2;
+  }
+
+  .popover header {
+    padding: 12px 16px 6px;
+  }
+
+  .block-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-label);
+  }
+
+  .list {
+    background: var(--list-ground);
+    padding: 16px 0;
+  }
+
+  .list .section-title {
+    padding: 0 32px 6px;
+    font-size: 13px;
+    color: #6c6c70;
+    text-transform: uppercase;
+  }
+
+  .list .group {
+    margin: 0 16px 20px;
+    background: var(--list-row);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 52px;
+    padding: 8px 16px;
+    border-top: 1px solid var(--list-line);
+  }
+
+  .row:first-child {
+    border-top: 0;
+  }
+
+  .row .glyph {
+    width: 22px;
+    text-align: center;
+    color: var(--system-blue);
+  }
+
+  .row .glyph.quiet {
+    color: #8e8e93;
+  }
+
+  .row .text {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .row .name {
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .row .subtitle {
+    font-size: 12px;
+    color: #6c6c70;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .row .selected {
+    color: var(--system-blue);
+    font-size: 20px;
+  }
+
+  .row .delivery {
+    font-size: 12px;
+    color: var(--ink-secondary);
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .row .delivery .when {
+    font-family: var(--mono);
+  }
+
+  .row .delivery.refused {
+    color: var(--ink);
+  }
+
+  .popover .row .subtitle {
+    white-space: normal;
+  }
+
+  .row.unavailable .name {
+    color: #8e8e93;
+  }
+
+  .row .tick {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 1.5px solid #c7c7cc;
+    flex: none;
+  }
+
+  .row .tick.on {
+    background: var(--system-blue);
+    border-color: var(--system-blue);
+    position: relative;
+  }
+
+  .row .tick.on::after {
+    content: "";
+    position: absolute;
+    left: 7px;
+    top: 3px;
+    width: 5px;
+    height: 10px;
+    border: solid #ffffff;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+  }
+
+  .footer-text {
+    padding: 6px 32px 0;
+    font-size: 13px;
+    color: #6c6c70;
+  }
+
+  .menu {
+    position: absolute;
+    top: 46px;
+    right: 14px;
+    width: 240px;
+    background: rgba(250, 250, 250, 0.98);
+    border-radius: 13px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.22);
+    overflow: hidden;
+    z-index: 2;
+  }
+
+  .menu div {
+    display: flex;
+    justify-content: space-between;
+    padding: 11px 16px;
+    border-top: 1px solid var(--list-line);
+  }
+
+  .menu div:first-child {
+    border-top: 0;
+  }
+
+  .form {
+    padding: 20px;
+    background: var(--list-row);
+    min-height: 380px;
+  }
+
+  .form h3 {
+    font-size: 17px;
+    margin: 0 0 6px;
+  }
+
+  .form .field {
+    display: flex;
+    gap: 10px;
+    margin: 0 0 12px;
+  }
+
+  .form .input {
+    flex: 1;
+    border: 1px solid #c7c7cc;
+    border-radius: 6px;
+    padding: 7px 9px;
+    font-size: 15px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .form .button {
+    background: var(--system-blue);
+    color: #ffffff;
+    border-radius: 8px;
+    padding: 7px 14px;
+    font-weight: 600;
+  }
+
+  .form .help {
+    font-size: 13px;
+    color: var(--ink-secondary);
+    margin: 0 0 12px;
+  }
+
+  .form .failure {
+    font-size: 13px;
+    color: #ff3b30;
+  }
+
+  .register-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 28px;
+    flex-wrap: wrap;
+  }
+
+  .register-head .pinned {
+    font-size: 13px;
+    color: var(--ink-secondary);
+  }
+
+  .register-head .count {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink-secondary);
+  }
+
+  .spacer {
+    flex: 1;
+  }
+
+  .register-lines {
+    margin: 8px 28px 28px;
+    background: var(--sheet);
+    border: 1px solid var(--sheet-edge);
+    border-radius: 2px;
+  }
+
+  .register-lines .line {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    padding: 8px 13px;
+    border-top: 1px solid var(--rule-hair);
+    font-size: 15px;
+  }
+
+  .register-lines .line:first-child {
+    border-top: 0;
+  }
+
+  .register-lines .preview {
+    width: 30px;
+    height: 40px;
+    border: 1px solid var(--sheet-edge);
+    background: var(--sheet);
+  }
+
+  .register-lines .number {
+    font-family: var(--mono);
+    font-size: 12px;
+    width: 40px;
+  }
+
+  @media (max-width: 640px) {
+    .popover {
+      right: 12px;
+    }
+
+    .hide-narrow {
+      display: none;
+    }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>The iPad sends through the sketch hub</h1>
+  <p class="intro">Phase 8 design, built from the companion's own parts: the host list rows, the status chip, the notice line and the register head. Every new word is in English, as the app is.</p>
+
+  <section class="state" id="host-list">
+    <h2>1. The hub in the host list</h2>
+    <p>The hub is one row next to the paired hosts, chosen with the same checkmark. The toolbar's Pair becomes Add, with two choices.</p>
+    <div class="ipad">
+      <div class="nav"><span class="back">Done</span><span class="title">Hosts</span><span class="action">Add</span></div>
+      <div class="menu">
+        <div>Pair a host <span>⌁</span></div>
+        <div>Add the sketch hub <span>◎</span></div>
+      </div>
+      <div class="list">
+        <div class="group">
+          <div class="row"><span class="glyph">🔒</span><div class="text"><div class="name">Desley's MacBook Pro</div><div class="subtitle">macOS · paired</div></div></div>
+          <div class="row"><span class="glyph">🔒</span><div class="text"><div class="name">omarchy</div><div class="subtitle">Linux · paired</div></div></div>
+          <div class="row"><span class="glyph">◎</span><div class="text"><div class="name">Sketch hub</div><div class="subtitle">paperclip.procrast.nl · through the tailnet</div></div><span class="selected">✓</span></div>
+        </div>
+        <div class="group">
+          <div class="row"><div class="text"><div class="name">Keep screen awake</div></div><span class="tick on"></span></div>
+        </div>
+        <div class="footer-text">Only while the app is in the foreground.</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="state" id="add-hub">
+    <h2>2. Adding the hub</h2>
+    <p>The pairing screen's paste form, with the address filled in. Nothing to scan: the hub knows the iPad from the tailnet.</p>
+    <div class="ipad">
+      <div class="nav"><span class="back">Cancel</span><span class="title">Add the sketch hub</span><span class="action">&nbsp;</span></div>
+      <div class="form">
+        <h3>Address</h3>
+        <div class="field"><span class="input">https://paperclip.procrast.nl:8441</span><span class="button">Add</span></div>
+        <p class="help">The hub knows this iPad through the tailnet. Allow it once on dev.procrast.nl, under Sketch hub.</p>
+        <p class="failure">The hub refused: ipad148 is not allowed on the sketch hub; allow it on the dev-portal page.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="state" id="register">
+    <h2>3. The register with the hub chosen</h2>
+    <p>The register head gets one more chip beside the status chip: how many machines this iPad sends to. Tapping it opens the same list as on a sheet.</p>
+    <div class="ipad">
+      <div class="nav"><span class="title" style="text-align:left;font-size:28px;font-weight:700">Pages</span><span class="icon">⚙︎</span><span class="icon">＋</span></div>
+      <div class="register-head">
+        <span class="block-label">Agent reads</span>
+        <span class="pinned">whichever sheet you drew on last</span>
+        <span class="spacer"></span>
+        <span class="chip"><span class="dot"></span><span class="label">Saved</span><span class="time">21:56</span></span>
+        <span class="chip"><span class="dot"></span><span class="label">3 machines</span><span class="chevron">▾</span></span>
+        <span class="count">4 sheets</span>
+      </div>
+      <div class="register-lines">
+        <div class="line"><span class="preview"></span><span class="number">A-04</span><span>Hub flow</span></div>
+        <div class="line"><span class="preview"></span><span class="number">A-03</span><span>Receiver loop</span></div>
+        <div class="line"><span class="preview"></span><span class="number">A-02</span><span>Tailnet policy</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="state" id="machines">
+    <h2>4. Choosing machines, and what reached each one</h2>
+    <p>The ticked set stays until changed. Each line says what the hub reported for this sheet: delivered with the time, queued, or refused with the hub's reason. A ticked machine the hub stopped listing stays, marked as not fetching.</p>
+    <div class="ipad">
+      <div class="nav"><span class="back">‹ Pages</span><span class="title">Hub flow</span><span class="chip pressed"><span class="dot"></span><span class="label">3 machines</span><span class="chevron">▾</span></span><span class="chip"><span class="dot"></span><span class="label">Saved</span><span class="time">21:56</span></span><span class="icon hide-narrow">↶</span><span class="icon hide-narrow">⋯</span></div>
+      <div class="popover">
+        <header><span class="block-label">Send this sheet to</span></header>
+        <div class="row"><span class="tick on"></span><div class="text"><div class="name">paperclip</div></div><span class="delivery">delivered <span class="when">21:56</span></span></div>
+        <div class="row"><span class="tick on"></span><div class="text"><div class="name">desleys-macbook-pro-rex</div></div><span class="delivery">queued</span></div>
+        <div class="row unavailable"><span class="tick on"></span><div class="text"><div class="name">omarchy</div><div class="subtitle">has not fetched from the hub since 6 Nov</div></div><span class="delivery">queued</span></div>
+        <div class="row"><span class="tick"></span><div class="text"><div class="name">desleys-macbook-pro</div></div><span class="delivery">&nbsp;</span></div>
+      </div>
+      <div class="canvas"><svg viewBox="0 0 800 360" aria-hidden="true"><path d="M90 110 C 160 60, 230 160, 300 100 S 420 80, 470 140" fill="none" stroke="#1a1917" stroke-width="3"/><rect x="120" y="190" width="160" height="80" fill="none" stroke="#1a1917" stroke-width="3"/><path d="M290 230 L 420 230" stroke="#1a1917" stroke-width="3"/><circle cx="480" cy="230" r="44" fill="none" stroke="#1a1917" stroke-width="3"/></svg></div>
+    </div>
+  </section>
+
+  <section class="state" id="refused-machine">
+    <h2>5. One machine refused</h2>
+    <p>The chip stays blue, because the sheet reached the hub. The refusal is on that machine's line, in the hub's own words.</p>
+    <div class="ipad">
+      <div class="nav"><span class="back">‹ Pages</span><span class="title">Hub flow</span><span class="chip pressed"><span class="dot"></span><span class="label">2 machines</span><span class="chevron">▾</span></span><span class="chip"><span class="dot"></span><span class="label">Saved</span><span class="time">22:03</span></span></div>
+      <div class="popover">
+        <header><span class="block-label">Send this sheet to</span></header>
+        <div class="row"><span class="tick on"></span><div class="text"><div class="name">paperclip</div><div class="subtitle">the queue is full (200, -sketch-hub-queue-limit)</div></div><span class="delivery refused">refused</span></div>
+        <div class="row"><span class="tick on"></span><div class="text"><div class="name">desleys-macbook-pro</div></div><span class="delivery">delivered <span class="when">22:03</span></span></div>
+      </div>
+      <div class="canvas"><svg viewBox="0 0 800 360" aria-hidden="true"><path d="M90 110 C 160 60, 230 160, 300 100" fill="none" stroke="#1a1917" stroke-width="3"/></svg></div>
+    </div>
+  </section>
+
+  <section class="state" id="nothing-ticked">
+    <h2>6. Nothing ticked</h2>
+    <p>Nothing is sent. The chip says so, and the notice line says what to do.</p>
+    <div class="ipad">
+      <div class="nav"><span class="back">‹ Pages</span><span class="title">Hub flow</span><span class="chip"><span class="dot waiting"></span><span class="label">No machine</span><span class="chevron">▾</span></span><span class="chip"><span class="dot waiting"></span><span class="label">Waiting</span><span class="time">&nbsp;</span></span></div>
+      <div class="notice">Tick a machine to send this sheet to. Your drawing stays on the iPad until you do.</div>
+      <div class="canvas"><svg viewBox="0 0 800 360" aria-hidden="true"><path d="M90 110 C 160 60, 230 160, 300 100" fill="none" stroke="#1a1917" stroke-width="3"/></svg></div>
+    </div>
+  </section>
+
+  <section class="state" id="no-machines">
+    <h2>7. No machine fetches from the hub yet</h2>
+    <p>The list is empty, and says how a machine gets on it.</p>
+    <div class="ipad">
+      <div class="nav"><span class="back">‹ Pages</span><span class="title">Hub flow</span><span class="chip pressed"><span class="dot waiting"></span><span class="label">No machine</span><span class="chevron">▾</span></span><span class="chip"><span class="dot waiting"></span><span class="label">Waiting</span><span class="time">&nbsp;</span></span></div>
+      <div class="popover">
+        <header><span class="block-label">Send this sheet to</span></header>
+        <div class="row"><div class="text"><div class="subtitle" style="white-space:normal">No machine fetches from the hub yet. Run goghmode receive on a machine and allow it on dev.procrast.nl.</div></div></div>
+      </div>
+      <div class="canvas"><svg viewBox="0 0 800 360" aria-hidden="true"></svg></div>
+    </div>
+  </section>
+
+  <section class="state" id="ipad-refused">
+    <h2>8. The iPad is not allowed yet, or there is no connection</h2>
+    <p>The status chip turns red as it does for a host. A refusal reads Refused with the hub's sentence on the notice line; no connection reads Offline and retries, as with a host.</p>
+    <div class="ipad">
+      <div class="nav"><span class="back">‹ Pages</span><span class="title">Hub flow</span><span class="chip"><span class="dot waiting"></span><span class="label">3 machines</span><span class="chevron">▾</span></span><span class="chip"><span class="dot failed"></span><span class="label">Refused</span><span class="time">&nbsp;</span></span></div>
+      <div class="notice">The hub refused: ipad148 is not allowed on the sketch hub; allow it on the dev-portal page.</div>
+      <div class="canvas"><svg viewBox="0 0 800 360" aria-hidden="true"><path d="M90 110 C 160 60, 230 160, 300 100" fill="none" stroke="#1a1917" stroke-width="3"/></svg></div>
+    </div>
+  </section>
+</main>
+</body>
+</html>

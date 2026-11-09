@@ -23,6 +23,7 @@ this way?", write the ADR.
 | [0005](0005-native-swiftui-over-flutter.md) | Native SwiftUI and PencilKit for the iPad companion | Accepted |
 | [0006](0006-paired-devices-over-shared-url-token.md) | Paired devices with per-device secrets, not one shared URL token | Accepted |
 | [0007](0007-ruling-is-a-writing-aid-not-a-texture.md) | Ruling is a writing aid, not a texture | Accepted |
+| [0008](0008-narration-is-transcribed-on-the-device.md) | Narration is transcribed on the drawing device, and only text crosses the wire | Accepted |
 
 The first five were written up on 25 July 2026 from the code and the background
 documents. The date on each record is when the decision was *made*, not when it was

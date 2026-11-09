@@ -9,6 +9,8 @@ mod drawing;
 #[allow(dead_code)]
 #[path = "../src/export.rs"]
 mod export;
+#[path = "../src/timeline.rs"]
+mod timeline;
 #[allow(dead_code)]
 #[path = "../src/host.rs"]
 mod host;
