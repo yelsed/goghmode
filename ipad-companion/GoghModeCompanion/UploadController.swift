@@ -17,6 +17,9 @@ final class UploadController: ObservableObject {
         /// moved and the address with it. A retry cannot fix it — only a fresh
         /// pairing can — so this is offered as a repair, not a retry.
         case needsRepair(String)
+        /// The sketch hub answered and said no (this iPad is not allowed yet,
+        /// or the body was too large). The hub's sentence says what to do.
+        case refused(String)
 
         var label: String {
             switch self {
@@ -34,6 +37,8 @@ final class UploadController: ObservableObject {
                 "Wrong host"
             case .needsRepair:
                 "Re-pair"
+            case .refused:
+                "Refused"
             }
         }
     }
@@ -80,6 +85,17 @@ final class UploadController: ObservableObject {
     /// disappears the moment it is pressed reads as the app breaking.
     @Published private(set) var hostIsKnown = false
 
+    /// What the hub said per machine, by page id: from each send's answer, then
+    /// refreshed from the hub while the machine list is open.
+    @Published private(set) var hubDeliveries: [String: [MachineDelivery]] = [:]
+
+    /// The machines the hub offers; `nil` until it has been asked.
+    @Published private(set) var offeredMachines: [HubMachine]?
+    @Published private(set) var machineListComplaint: String?
+
+    let machineSelection: MachineSelection
+    private let hubClient: SketchHubClient
+
     private let client: GoghModeClient
     /// The store a paired host lives in, held so an upload that lands on a
     /// fallback address can record which one. `nil` where no store is
@@ -119,15 +135,24 @@ final class UploadController: ObservableObject {
     var canRetry: Bool {
         // Deliberately not offered for `wrongHost`: retrying into a machine that
         // could not prove itself is exactly what must not happen automatically.
-        if case .failed = status {
+        switch status {
+        case .failed, .refused:
             return lastSnapshot != nil
+        default:
+            return false
         }
-        return false
     }
 
-    init(client: GoghModeClient = GoghModeClient(), hostStore: HostStore? = nil) {
+    init(
+        client: GoghModeClient = GoghModeClient(),
+        hostStore: HostStore? = nil,
+        hubClient: SketchHubClient = SketchHubClient(),
+        machineSelection: MachineSelection? = nil
+    ) {
         self.client = client
         self.hostStore = hostStore
+        self.hubClient = hubClient
+        self.machineSelection = machineSelection ?? MachineSelection()
     }
 
     func schedule(snapshot: DrawingSnapshot, to destination: Destination) {
@@ -203,6 +228,9 @@ final class UploadController: ObservableObject {
         addressesThatRefusedRuling.removeAll()
         addressesThatRefusedNarration.removeAll()
         hostIsKnown = false
+        offeredMachines = nil
+        machineListComplaint = nil
+        hubDeliveries.removeAll()
         pagesSupported = true
         pinningSupported = true
         rulingSupported = true
@@ -214,7 +242,9 @@ final class UploadController: ObservableObject {
     /// when it is actually true on disk.
     func pin(_ pageID: String?, to destination: Destination) async -> Bool {
         await stamp(destination) {
-            if destination.isPaired {
+            if destination.host.isSketchHub {
+                try await stampThroughHub(.pin, pageID, destination)
+            } else if destination.isPaired {
                 try await client.pin(
                     pageID,
                     on: destination.host,
@@ -232,7 +262,9 @@ final class UploadController: ObservableObject {
     /// Sends one page now without moving the stamp.
     func promote(_ pageID: String, to destination: Destination) async -> Bool {
         let accepted = await stamp(destination) {
-            if destination.isPaired {
+            if destination.host.isSketchHub {
+                try await stampThroughHub(.promote, pageID, destination)
+            } else if destination.isPaired {
                 try await client.promote(
                     pageID,
                     on: destination.host,
@@ -250,6 +282,82 @@ final class UploadController: ObservableObject {
             status = .saved(Date())
         }
         return accepted
+    }
+
+    private func stampThroughHub(
+        _ kind: SketchHubStamp,
+        _ pageID: String?,
+        _ destination: Destination
+    ) async throws {
+        let machines = try tickedMachines()
+        let deliveries = try await hubClient.stamp(
+            kind,
+            pageID: pageID,
+            to: machines,
+            at: destination.host.address
+        )
+        if let pageID {
+            hubDeliveries[pageID] = deliveries
+        }
+        try Self.failWhenEveryMachineRefused(deliveries)
+    }
+
+    /// The hub answers 200 even when it queued for nobody. Some machines refusing
+    /// is shown on their lines; all of them refusing means nothing went anywhere.
+    private static func failWhenEveryMachineRefused(_ deliveries: [MachineDelivery]) throws {
+        guard !deliveries.isEmpty, deliveries.allSatisfy({ $0.state == .refused }) else { return }
+        throw SketchHubError.refused(deliveries.first?.reason ?? "every machine refused")
+    }
+
+    /// Ticking a machine after drawing with none ticked sends the sheet that was
+    /// kept back, instead of waiting for the next stroke.
+    func sendWhatWasWaitingForAMachine() async {
+        guard complaint == MachineSelection.nothingTickedMessage,
+              let snapshot = lastSnapshot,
+              let destination = lastDestination,
+              !machineSelection.ticked.isEmpty
+        else { return }
+        await send(snapshot, to: destination)
+    }
+
+    private func tickedMachines() throws -> [String] {
+        let machines = machineSelection.ticked
+        guard !machines.isEmpty else {
+            throw NothingTicked()
+        }
+        return machines
+    }
+
+    /// Asks the hub which machines it can deliver to.
+    func loadOfferedMachines(from destination: Destination) async {
+        do {
+            let machines = try await hubClient.machines(at: destination.host.address)
+            if machines != offeredMachines {
+                offeredMachines = machines
+            }
+            if machineListComplaint != nil {
+                machineListComplaint = nil
+            }
+        } catch {
+            // Closing the list cancels the request; that is not the hub failing.
+            if error is CancellationError { return }
+            if let urlError = error as? URLError, urlError.code == .cancelled { return }
+            machineListComplaint = guidance(for: error, sketchHub: true)
+        }
+    }
+
+    /// Asks the hub what reached each machine for one page.
+    func refreshDeliveries(of pageID: String, from destination: Destination) async {
+        guard let fetched = try? await hubClient.deliveries(of: pageID, at: destination.host.address)
+        else { return }
+        // The route lists only machines the page was queued for, so the refusals
+        // from the send answer are kept beside it.
+        let listed = Set(fetched.map(\.machine))
+        let refusals = (hubDeliveries[pageID] ?? []).filter { $0.state == .refused && !listed.contains($0.machine) }
+        let merged = (fetched + refusals).sorted { $0.machine < $1.machine }
+        if merged != hubDeliveries[pageID] {
+            hubDeliveries[pageID] = merged
+        }
     }
 
     private func stamp(
@@ -271,7 +379,7 @@ final class UploadController: ObservableObject {
             try await perform()
             return true
         } catch {
-            record(error)
+            record(error, sketchHub: destination.host.isSketchHub)
             return false
         }
     }
@@ -281,13 +389,25 @@ final class UploadController: ObservableObject {
         lastDestination = destination
     }
 
-    private func record(_ error: Error) {
+    private func record(_ error: Error, sketchHub: Bool? = nil) {
         // A cancelled upload is the next stroke arriving, not a failure. URLSession
         // reports it as `URLError.cancelled`, whose description is the bare word
         // "cancelled" — which is what every stroke used to put on screen.
         if error is CancellationError { return }
         if let urlError = error as? URLError, urlError.code == .cancelled { return }
 
+        if error is NothingTicked {
+            // Not a failure: nothing was meant to go anywhere yet.
+            complaint = MachineSelection.nothingTickedMessage
+            status = .waiting
+            return
+        }
+        if let hubError = error as? SketchHubError, case .refused = hubError {
+            let message = guidance(for: error)
+            complaint = message
+            status = .refused(message)
+            return
+        }
         if let uploadError = error as? UploadError, case .wrongHost(let name) = uploadError {
             let message =
                 "The machine answering for \(name) could not prove it is that host. Nothing was sent."
@@ -295,7 +415,7 @@ final class UploadController: ObservableObject {
             status = .wrongHost(message)
             return
         }
-        let message = guidance(for: error)
+        let message = guidance(for: error, sketchHub: sketchHub ?? lastDestination?.host.isSketchHub ?? false)
         complaint = message
         status = .failed(message)
     }
@@ -307,7 +427,7 @@ final class UploadController: ObservableObject {
     /// whose answer is already known — and a dropped probe would then be able to
     /// switch off a control that is certainly available.
     private func resolvedCapabilities(for destination: Destination) async -> GoghModeCapabilities {
-        if destination.isPaired {
+        if destination.isPaired || destination.host.isSketchHub {
             pagesSupported = true
             pinningSupported = true
             hostIsKnown = true
@@ -436,6 +556,16 @@ final class UploadController: ObservableObject {
     }
 
     private func deliver(_ snapshot: DrawingSnapshot, to destination: Destination) async throws {
+        if destination.host.isSketchHub {
+            let deliveries = try await hubClient.send(
+                snapshot,
+                to: try tickedMachines(),
+                at: destination.host.address
+            )
+            hubDeliveries[snapshot.page?.id ?? legacyPageID] = deliveries
+            try Self.failWhenEveryMachineRefused(deliveries)
+            return
+        }
         if destination.isPaired {
             // The active address first, then the rest the host offered when it
             // paired. A hop to the next address happens only for network-level
@@ -491,7 +621,13 @@ final class UploadController: ObservableObject {
         )
     }
 
-    private func guidance(for error: Error) -> String {
+    private func guidance(for error: Error, sketchHub: Bool = false) -> String {
+        if let hubError = error as? SketchHubError {
+            return hubError.errorDescription ?? "The sketch hub refused."
+        }
+        if sketchHub, error is URLError {
+            return "The sketch hub is not answering. Check that this iPad is on the tailnet, then tap to retry."
+        }
         if let uploadError = error as? UploadError {
             return uploadError.errorDescription ?? "Upload failed."
         }
@@ -525,3 +661,10 @@ private extension URLError {
         }
     }
 }
+
+/// Thrown when the hub is the destination and no machine is ticked: nothing is
+/// sent, and the notice line asks for a machine.
+private struct NothingTicked: Error {}
+
+/// Where the hub files a sheet from a client that has no pages, as hosts do.
+private let legacyPageID = "legacy"

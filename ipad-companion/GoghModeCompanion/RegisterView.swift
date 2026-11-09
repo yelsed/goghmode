@@ -118,6 +118,15 @@ struct RegisterView: View {
                     showingRePair = true
                 }
 
+                if destination.host.isSketchHub {
+                    MachineControl(
+                        uploader: uploader,
+                        selection: uploader.machineSelection,
+                        destination: destination,
+                        pageID: nil
+                    )
+                }
+
                 Text("\(store.pages.count) sheets")
                     .font(.caption.monospaced().weight(.medium))
                     .foregroundStyle(Sheet.onGroundSecondary)
