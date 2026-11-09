@@ -1,0 +1,10 @@
+[Unit]
+Description=GoghMode sketch hub receiver
+
+[Service]
+ExecStart=%h/.cargo/bin/goghmode receive --hub https://paperclip.procrast.nl:8441
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

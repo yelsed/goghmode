@@ -210,6 +210,41 @@ Mobile buttons:
 - `Export PNG`, `Export SVG`, and `Export JSON` keep files on the phone.
 - `Undo`, `Clear`, and `Brush` work locally in the phone browser.
 
+## Receive through the sketch hub
+
+The sketch hub in dev-portal on paperclip queues sketches per machine. `goghmode receive` runs in the background on each machine, fetches what was queued for it over the tailnet, and writes it into the drawings directory exactly as a paired host does: a sheet becomes `latest.*` and its page files, and a pin or promote behaves as with a paired host. There is no key: the hub knows the machine from its Tailscale name.
+
+1. Install GoghMode on the machine (`cargo install --path .`). The receiver uses the system's `curl`.
+2. Start the receiver once by hand:
+
+   ```bash
+   goghmode receive --hub https://paperclip.procrast.nl:8441
+   ```
+
+   Until the machine is allowed it logs the hub's refusal, which names the machine.
+3. Open `https://dev.procrast.nl/`, find the machine under "Sketch hub" and allow it. From the next fetch on it appears in the list a sender can tick.
+4. Keep it running as a service.
+
+   Linux (systemd user unit):
+
+   ```bash
+   mkdir -p ~/.config/systemd/user
+   cp contrib/receiver/goghmode-receive.service ~/.config/systemd/user/
+   systemctl --user daemon-reload
+   systemctl --user enable --now goghmode-receive.service
+   loginctl enable-linger "$USER"   # keeps it running without a login, on a server
+   journalctl --user -u goghmode-receive.service -f
+   ```
+
+   macOS (launchd agent, log in `/tmp/goghmode-receive.log`):
+
+   ```bash
+   cp contrib/receiver/goghmode-receive.plist ~/Library/LaunchAgents/
+   launchctl load ~/Library/LaunchAgents/goghmode-receive.plist
+   ```
+
+`--interval-seconds` (default 5) sets how often it asks, `--timeout-seconds` (default 20) how long connecting may take and how long a transfer may stall without a byte, and the global `--drawings-dir` where it writes. A sheet the hub sent that is not a valid drawing is logged and confirmed, so it cannot block the queue; a write that fails is retried on the next round, in order.
+
 ## Update after code changes
 
 From this project directory:

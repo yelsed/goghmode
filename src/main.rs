@@ -5,6 +5,7 @@ mod crypto;
 mod drawing;
 mod export;
 mod host;
+mod hub_receiver;
 mod mobile_server;
 mod pages;
 mod prompt;
@@ -53,6 +54,16 @@ enum Command {
     InstallRaycast {
         #[arg(long)]
         dir: Option<PathBuf>,
+    },
+    /// Fetches the sketches the sketch hub queued for this machine and writes them as latest.*.
+    Receive {
+        /// The hub's address, for example https://paperclip.procrast.nl:8441.
+        #[arg(long)]
+        hub: String,
+        #[arg(long, default_value_t = 5)]
+        interval_seconds: u64,
+        #[arg(long, default_value_t = 20)]
+        timeout_seconds: u64,
     },
 }
 
@@ -120,6 +131,19 @@ fn run() -> anyhow::Result<()> {
                 directory.display()
             );
             Ok(())
+        }
+        Some(Command::Receive {
+            hub,
+            interval_seconds,
+            timeout_seconds,
+        }) => {
+            let drawings_dir = cli.drawings_dir.unwrap_or_else(default_drawings_dir);
+            hub_receiver::run_receiver(
+                &hub,
+                &drawings_dir,
+                std::time::Duration::from_secs(interval_seconds.max(1)),
+                std::time::Duration::from_secs(timeout_seconds.max(1)),
+            )
         }
         None => run_app(cli.drawings_dir.unwrap_or_else(default_drawings_dir)),
     }
@@ -239,6 +263,25 @@ impl From<SkillTargetArg> for SkillTarget {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn receive_needs_a_hub_url() {
+        assert!(Cli::try_parse_from(["goghmode", "receive"]).is_err());
+        let cli = Cli::try_parse_from(["goghmode", "receive", "--hub", "https://example"])
+            .expect("receive with --hub parses");
+        match cli.command {
+            Some(Command::Receive {
+                hub,
+                interval_seconds,
+                timeout_seconds,
+            }) => {
+                assert_eq!(hub, "https://example");
+                assert_eq!(interval_seconds, 5);
+                assert_eq!(timeout_seconds, 20);
+            }
+            _ => panic!("expected the receive command"),
+        }
+    }
 
     /// Terminal and Spotlight launches must land in the same place. When they did
     /// not, `/goghmode` could read a drawing from a different session entirely.

@@ -941,7 +941,7 @@ fn handle_promote_request(stream: &mut TcpStream, drawings_dir: &Path, body: &[u
 
 /// Names the first thing wrong with a snapshot. A bare "invalid" is impossible to
 /// act on when the drawing has thousands of points.
-fn validate_snapshot(snapshot: &DrawingSnapshot) -> Result<(), String> {
+pub(crate) fn validate_snapshot(snapshot: &DrawingSnapshot) -> Result<(), String> {
     if !SUPPORTED_SCHEMA_VERSIONS.contains(&snapshot.schema_version) {
         return Err(format!(
             "unsupported schemaVersion {} (this host understands 1, 2, 3 and 4)",
