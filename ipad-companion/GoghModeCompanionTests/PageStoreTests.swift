@@ -27,7 +27,15 @@ final class PageStoreTests: XCTestCase {
         source.update(pageID, with: drawing)
         source.recordRevision(pageID, drawing)
         source.setRuling(SheetRuling(style: .grid), on: pageID)
+        let segment = NarrationSegment(start: 1_000, end: 2_000, text: "Sheet narration")
+        source.appendNarration([segment], to: pageID, from: "whisperkit", recorded: 1.0)
+        let audio = NarrationAudioStore.audioURL(for: pageID, startedAtMilliseconds: 1_000)
+        try FileManager.default.createDirectory(at: audio.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let recording = Data("test recording".utf8)
+        try recording.write(to: audio)
+        defer { NarrationAudioStore.discardAudio(for: pageID) }
         let archive = try source.exportSheetArchive()
+        NarrationAudioStore.discardAudio(for: pageID)
 
         let destinationURL = storeURL.deletingLastPathComponent().appendingPathComponent("\(UUID()).json")
         defer {
@@ -40,6 +48,8 @@ final class PageStoreTests: XCTestCase {
         XCTAssertEqual(destination.page(pageID)?.drawing.strokes.count, 1)
         XCTAssertEqual(destination.page(pageID)?.ruling?.style, .grid)
         XCTAssertTrue(destination.canStepBack)
+        XCTAssertEqual(destination.page(pageID)?.narration, [segment])
+        XCTAssertEqual(try Data(contentsOf: audio), recording)
         let edited = strokedDrawing()
         destination.update(pageID, with: PKDrawing(strokes: edited.strokes + edited.strokes))
         try destination.importSheetArchive(archive)
