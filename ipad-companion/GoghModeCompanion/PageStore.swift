@@ -516,6 +516,111 @@ final class PageStore: ObservableObject {
         var pinnedPageID: String?
     }
 
+    private struct SheetArchive: Codable {
+        let version: Int
+        let pages: [NotebookPage]
+        let series: [PageSeries]
+        let revisions: [String: RevisionTrail]
+        let narrationFiles: [String: [String: Data]]
+    }
+
+    enum ArchiveError: LocalizedError {
+        case invalid
+
+        var errorDescription: String? { "This file is not a readable GoghMode sheet archive." }
+    }
+
+    func exportSheetArchive() throws -> Data {
+        var revisions: [String: RevisionTrail] = [:]
+        var narrationFiles: [String: [String: Data]] = [:]
+        let files = FileManager.default
+        for page in pages {
+            revisions[page.id] = trail(for: page.id)
+            let directory = NarrationAudioStore.directory(for: page.id)
+            guard files.fileExists(atPath: directory.path) else { continue }
+            for file in try files.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+                where Self.isNarrationFile(file.lastPathComponent) {
+                narrationFiles[page.id, default: [:]][file.lastPathComponent] = try Data(contentsOf: file)
+            }
+        }
+        return try JSONEncoder().encode(SheetArchive(
+            version: 1, pages: pages, series: series, revisions: revisions, narrationFiles: narrationFiles
+        ))
+    }
+
+    @discardableResult
+    func importSheetArchive(_ data: Data) throws -> (added: Int, conflicts: Int) {
+        let archive = try JSONDecoder().decode(SheetArchive.self, from: data)
+        let pageIDs = Set(archive.pages.map(\.id))
+        let seriesIDs = Set(archive.series.map(\.id))
+        guard archive.version == 1, pageIDs.count == archive.pages.count, seriesIDs.count == archive.series.count,
+              archive.pages.allSatisfy({ page in
+                  Self.isArchiveID(page.id) && (page.seriesID.map(seriesIDs.contains) ?? true)
+              }),
+              seriesIDs.allSatisfy({ Self.isArchiveID($0) }),
+              archive.revisions.allSatisfy({ entry in
+                  pageIDs.contains(entry.key) && entry.value.states.indices.contains(entry.value.cursor)
+                      && entry.value.states.count <= Self.revisionDepth
+              }),
+              archive.narrationFiles.allSatisfy({ entry in
+                  pageIDs.contains(entry.key) && entry.value.keys.allSatisfy { Self.isNarrationFile($0) }
+              }) else {
+            throw ArchiveError.invalid
+        }
+        let localByID = Dictionary(uniqueKeysWithValues: pages.map { ($0.id, $0) })
+        let imported = archive.pages.filter { localByID[$0.id] == nil }
+        let conflicts = archive.pages.count { incoming in
+            localByID[incoming.id].map { $0 != incoming } ?? false
+        }
+        guard !imported.isEmpty else { return (0, conflicts) }
+        let files = FileManager.default
+        let requiredSeries = Set(imported.compactMap(\.seriesID))
+        var combinedSeries = series
+        for incoming in archive.series where requiredSeries.contains(incoming.id) {
+            guard !combinedSeries.contains(where: { $0.id == incoming.id }) else { continue }
+            var copy = incoming
+            if combinedSeries.contains(where: { $0.prefix == copy.prefix }),
+               let spare = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".first(where: { letter in
+                   !combinedSeries.contains { $0.prefix == String(letter) }
+               }) {
+                copy.prefix = String(spare)
+            }
+            combinedSeries.append(copy)
+        }
+        try files.createDirectory(at: revisionsURL, withIntermediateDirectories: true)
+        for page in imported {
+            if let trail = archive.revisions[page.id] {
+                try JSONEncoder().encode(trail).write(to: trailURL(for: page.id), options: .atomic)
+            }
+            if let recordings = archive.narrationFiles[page.id], !recordings.isEmpty {
+                let directory = NarrationAudioStore.directory(for: page.id)
+                try files.createDirectory(at: directory, withIntermediateDirectories: true)
+                for (name, bytes) in recordings {
+                    try bytes.write(to: directory.appendingPathComponent(name), options: .atomic)
+                }
+            }
+        }
+        let combinedPages = pages + imported
+        let stored = Stored(pages: combinedPages, series: combinedSeries, pinnedPageID: pinnedPageID)
+        try JSONEncoder().encode(stored).write(to: storeURL, options: .atomic)
+        pages = combinedPages
+        series = combinedSeries
+        return (imported.count, conflicts)
+    }
+
+    private static func isArchiveID(_ name: String) -> Bool {
+        !name.isEmpty && name.utf8.count <= 128 && name.utf8.allSatisfy { byte in
+            (48...57).contains(byte) || (65...90).contains(byte) || (97...122).contains(byte)
+                || byte == 45 || byte == 95
+        }
+    }
+
+    private static func isNarrationFile(_ name: String) -> Bool {
+        let parts = name.split(separator: ".", omittingEmptySubsequences: false)
+        return parts.count == 2 && !parts[0].isEmpty && parts[0].utf8.allSatisfy { (48...57).contains($0) }
+            && (parts[1] == "wav" || parts[1] == "json")
+    }
+
     private func load() {
         guard let data = try? Data(contentsOf: storeURL) else { return }
         if let stored = try? JSONDecoder().decode(Stored.self, from: data) {

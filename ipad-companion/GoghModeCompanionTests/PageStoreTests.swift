@@ -19,6 +19,34 @@ final class PageStoreTests: XCTestCase {
         PageStore(storeURL: storeURL)
     }
 
+    func testTransferKeepsDrawingRulingAndRevisionWithoutOverwritingLocalChanges() throws {
+        let source = store()
+        let pageID = source.addPage().id
+        source.select(pageID)
+        let drawing = strokedDrawing()
+        source.update(pageID, with: drawing)
+        source.recordRevision(pageID, drawing)
+        source.setRuling(SheetRuling(style: .grid), on: pageID)
+        let archive = try source.exportSheetArchive()
+
+        let destinationURL = storeURL.deletingLastPathComponent().appendingPathComponent("\(UUID()).json")
+        defer {
+            try? FileManager.default.removeItem(at: destinationURL)
+            try? FileManager.default.removeItem(at: destinationURL.deletingPathExtension().appendingPathExtension("revisions"))
+        }
+        let destination = PageStore(storeURL: destinationURL)
+        try destination.importSheetArchive(archive)
+        destination.select(pageID)
+        XCTAssertEqual(destination.page(pageID)?.drawing.strokes.count, 1)
+        XCTAssertEqual(destination.page(pageID)?.ruling?.style, .grid)
+        XCTAssertTrue(destination.canStepBack)
+        let edited = strokedDrawing()
+        destination.update(pageID, with: PKDrawing(strokes: edited.strokes + edited.strokes))
+        try destination.importSheetArchive(archive)
+        XCTAssertEqual(destination.pages.filter { $0.id == pageID }.count, 1)
+        XCTAssertEqual(destination.page(pageID)?.drawing.strokes.count, 2)
+    }
+
     private func strokedDrawing() -> PKDrawing {
         let points = [CGPoint(x: 10, y: 10), CGPoint(x: 40, y: 40)].map { location in
             PKStrokePoint(
