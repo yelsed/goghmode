@@ -58,7 +58,7 @@ struct ContentView: View {
             if let destination {
                 register(sending: destination)
             } else {
-                HostListView(hostStore: hostStore)
+                HostListView(hostStore: hostStore, pageStore: pageStore)
             }
         }
         .environment(\.registerColumns, RegisterColumns(scale: columnUnit / 100))
@@ -112,7 +112,7 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $showingSettings) {
-            HostListView(hostStore: hostStore)
+            HostListView(hostStore: hostStore, pageStore: pageStore)
         }
     }
 

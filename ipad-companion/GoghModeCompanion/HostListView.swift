@@ -1,14 +1,20 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The saved hosts and the way to add one. Selecting a destination is a
 /// deliberate act here, never something that happens as a side effect of a
 /// failure elsewhere.
 struct HostListView: View {
     @ObservedObject var hostStore: HostStore
+    let pageStore: PageStore
     @Environment(\.dismiss) private var dismiss
     @State private var showingPairing = false
     @State private var showingAddHub = false
     @AppStorage(goghModeKeepAwakeKey) private var keepAwake = true
+    @State private var archive: SheetArchiveDocument?
+    @State private var exporting = false
+    @State private var importing = false
+    @State private var transferResult: String?
 
     var body: some View {
         NavigationStack {
@@ -53,6 +59,19 @@ struct HostListView: View {
                 } footer: {
                     Text("Only while the app is in the foreground.")
                 }
+                Section {
+                    Button("Export sheet library") {
+                        do {
+                            archive = SheetArchiveDocument(data: try pageStore.exportSheetArchive())
+                            exporting = true
+                        } catch {
+                            transferResult = error.localizedDescription
+                        }
+                    }
+                    Button("Import sheet library") { importing = true }
+                } footer: {
+                    Text("Archives include your sheets, revisions, and recorded audio. They do not include paired hosts or credentials.")
+                }
             }
             .navigationTitle("Hosts")
             .toolbar {
@@ -80,6 +99,31 @@ struct HostListView: View {
             .sheet(isPresented: $showingAddHub) {
                 AddSketchHubView(hostStore: hostStore)
             }
+            .fileExporter(
+                isPresented: $exporting, document: archive, contentType: .json,
+                defaultFilename: "GoghMode Sheets.json"
+            ) { result in
+                archive = nil
+                if case .failure(let error) = result { transferResult = error.localizedDescription }
+            }
+            .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
+                do {
+                    let file = try result.get()
+                    let scoped = file.startAccessingSecurityScopedResource()
+                    defer { if scoped { file.stopAccessingSecurityScopedResource() } }
+                    let summary = try pageStore.importSheetArchive(Data(contentsOf: file, options: .mappedIfSafe))
+                    transferResult = "Imported \(summary.added) sheets. Kept \(summary.conflicts) locally changed sheets."
+                } catch {
+                    transferResult = error.localizedDescription
+                }
+            }
+            .alert("Sheet library", isPresented: Binding(
+                get: { transferResult != nil }, set: { if !$0 { transferResult = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(transferResult ?? "")
+            }
         }
     }
 
@@ -100,6 +144,22 @@ struct HostListView: View {
             // Named plainly rather than dressed up: this one is only as private
             // as the URL it was set up with.
             : "unauthenticated link"
+    }
+}
+
+private struct SheetArchiveDocument: FileDocument {
+    static let readableContentTypes: [UTType] = [.json]
+    let data: Data
+
+    init(data: Data) { self.data = data }
+
+    init(configuration: ReadConfiguration) throws {
+        guard let data = configuration.file.regularFileContents else { throw CocoaError(.fileReadCorruptFile) }
+        self.data = data
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: data)
     }
 }
 
